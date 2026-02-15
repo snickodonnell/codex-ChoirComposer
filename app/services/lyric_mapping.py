@@ -7,6 +7,18 @@ from dataclasses import dataclass
 from app.models import LyricRhythmPreset, ScoreSyllable, SectionLabel
 
 
+def section_archetype(section_label: SectionLabel) -> str:
+    normalized = section_label.strip().lower()
+    if normalized in {"verse", "chorus", "bridge", "pre-chorus", "intro", "outro"}:
+        return normalized
+    if "pre" in normalized and "chorus" in normalized:
+        return "pre-chorus"
+    for archetype in ("chorus", "verse", "bridge", "intro", "outro"):
+        if archetype in normalized:
+            return archetype
+    return "custom"
+
+
 @dataclass
 class RhythmPolicyConfig:
     melismaRate: float
@@ -16,6 +28,7 @@ class RhythmPolicyConfig:
 
 
 def config_for_preset(preset: LyricRhythmPreset, section_label: SectionLabel) -> RhythmPolicyConfig:
+    archetype = section_archetype(section_label)
     base = {
         "syllabic": RhythmPolicyConfig(0.08, 0.08, 1.5, True),
         "mixed": RhythmPolicyConfig(0.22, 0.18, 1.5, True),
@@ -23,14 +36,14 @@ def config_for_preset(preset: LyricRhythmPreset, section_label: SectionLabel) ->
     }[preset]
 
     # Chorus can tolerate more extension, verse a bit less.
-    if section_label == "chorus":
+    if archetype == "chorus":
         return RhythmPolicyConfig(
             melismaRate=min(1.0, base.melismaRate + 0.08),
             subdivisionRate=base.subdivisionRate,
             phraseEndHoldBeats=min(2.0, base.phraseEndHoldBeats + 0.25),
             preferStrongBeatForStress=base.preferStrongBeatForStress,
         )
-    if section_label in {"verse", "bridge"}:
+    if archetype in {"verse", "bridge"}:
         return RhythmPolicyConfig(
             melismaRate=max(0.0, base.melismaRate - 0.05),
             subdivisionRate=base.subdivisionRate,

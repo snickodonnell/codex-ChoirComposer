@@ -9,9 +9,19 @@ textarea { width: 100%; min-height: 90px; }
 button { background: #1d4ed8; color: white; border: none; cursor: pointer; margin-right: .5rem; }
 button:hover { background: #1e40af; }
 .section-row { border: 1px dashed #d1d5db; border-radius: 10px; padding: .75rem; margin-bottom: .75rem; }
+.section-row-controls { display: flex; gap: .4rem; justify-content: flex-end; margin-bottom: .4rem; }
+.section-row-controls button { background: #475569; padding: .3rem .55rem; margin-right: 0; }
+.section-row-controls button:hover { background: #334155; }
+.section-row-controls .toggle-section-mode { margin-left: auto; background: #1d4ed8; }
+.section-row-controls .toggle-section-mode:hover { background: #1e40af; }
+.section-row[data-mode="saved"] .section-text,
+.section-row[data-mode="saved"] .section-title,
+.section-row[data-mode="saved"] .section-label { background: #f8fafc; }
 .actions { display: flex; gap: .5rem; margin: .75rem 0; }
 .actions input { flex: 1; }
 pre { background: #0b1220; color: #e5e7eb; padding: .6rem; border-radius: 8px; overflow: auto; }
 .staff-wrap { margin: .7rem 0; border: 1px solid #e5e7eb; padding: .5rem; border-radius: 8px; }
 
 .chord-line { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin: .4rem 0 .7rem; color: #334155; }
+
+.form-errors { display: none; margin-top: .6rem; padding: .5rem .6rem; border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 8px; font-size: .9rem; }
