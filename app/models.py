@@ -184,6 +184,12 @@ class SATBResponse(BaseModel):
     harmonization_notes: str
 
 
+class EndScoreResponse(BaseModel):
+    melody: CanonicalScore
+    satb: CanonicalScore
+    composition_notes: str
+
+
 class HarmonizeRequest(BaseModel):
     score: CanonicalScore
 
