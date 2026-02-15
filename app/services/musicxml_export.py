@@ -15,6 +15,7 @@ def export_musicxml(score: CanonicalScore) -> str:
         ("tenor", "P3"),
         ("bass", "P4"),
     ]
+    chords = {c.measure_number: c for c in score.chord_progression}
 
     lines: list[str] = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
@@ -50,6 +51,20 @@ def export_musicxml(score: CanonicalScore) -> str:
                         f"      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{score.meta.tempo_bpm}</per-minute></metronome></direction-type></direction>",
                     ]
                 )
+
+            if voice == "soprano" and measure.number in chords:
+                symbol = chords[measure.number].symbol
+                step = symbol[0]
+                alter = "#" in symbol
+                lines.append("      <harmony>")
+                lines.append("        <root>")
+                lines.append(f"          <root-step>{step}</root-step>")
+                if alter:
+                    lines.append("          <root-alter>1</root-alter>")
+                lines.append("        </root>")
+                lines.append("        <kind>major</kind>")
+                lines.append(f"        <degree><degree-value>{chords[measure.number].degree}</degree-value></degree>")
+                lines.append("      </harmony>")
 
             for note in measure.voices[voice]:
                 dur = int(note.beats)

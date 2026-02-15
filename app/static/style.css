@@ -13,3 +13,5 @@ button:hover { background: #1e40af; }
 .actions input { flex: 1; }
 pre { background: #0b1220; color: #e5e7eb; padding: .6rem; border-radius: 8px; overflow: auto; }
 .staff-wrap { margin: .7rem 0; border: 1px solid #e5e7eb; padding: .5rem; border-radius: 8px; }
+
+.chord-line { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin: .4rem 0 .7rem; color: #334155; }

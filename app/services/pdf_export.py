@@ -29,13 +29,16 @@ def build_score_pdf(score: CanonicalScore) -> bytes:
     c.setFont("Courier", 8)
     voices = ["soprano", "alto", "tenor", "bass"]
 
+    chords = {c.measure_number: c.symbol for c in score.chord_progression}
+
     for measure in score.measures:
         if y < 1.2 * inch:
             c.showPage()
             y = draw_header("Choir Composition (cont.)")
             c.setFont("Courier", 8)
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(0.75 * inch, y, f"Measure {measure.number}")
+        chord_symbol = chords.get(measure.number, "—")
+        c.drawString(0.75 * inch, y, f"Measure {measure.number}   Chord: {chord_symbol}")
         y -= 0.18 * inch
         c.setFont("Courier", 8)
         for voice in voices:

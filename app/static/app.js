@@ -51,6 +51,12 @@ function flattenVoice(score, voice) {
   return score.measures.flatMap(m => m.voices[voice]).filter(n => !n.is_rest);
 }
 
+
+function formatChordLine(score) {
+  if (!score?.chord_progression?.length) return 'Chord progression: —';
+  return `Chord progression: ${score.chord_progression.map(c => `m${c.measure_number}:${c.symbol}`).join(' | ')}`;
+}
+
 function noteToVexKey(p) {
   const m = p.match(/^([A-G]#?b?)(\d)$/);
   if (!m) return 'c/4';
@@ -123,6 +129,7 @@ document.getElementById('generateMelody').onclick = async () => {
   document.getElementById('melodySheet').innerHTML = '';
   const notes = flattenVoice(melodyScore, 'soprano');
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
+  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', 'Melody', notes, melodyScore.meta.time_signature);
 };
 
@@ -132,6 +139,7 @@ document.getElementById('refine').onclick = async () => {
   const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: false });
   melodyScore = (await res.json()).score;
   document.getElementById('melodySheet').innerHTML = '';
+  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', 'Melody (refined)', flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
 };
 
@@ -141,6 +149,7 @@ document.getElementById('regenerate').onclick = async () => {
   const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: true });
   melodyScore = (await res.json()).score;
   document.getElementById('melodySheet').innerHTML = '';
+  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', 'Melody (regenerated)', flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
 };
 
@@ -156,6 +165,7 @@ document.getElementById('generateSATB').onclick = async () => {
   const payload = await res.json();
   satbScore = payload.score;
   satbMeta.textContent = JSON.stringify({ ...satbScore.meta, harmonization: payload.harmonization_notes }, null, 2);
+  document.getElementById('satbChords').textContent = formatChordLine(satbScore);
   document.getElementById('satbSheet').innerHTML = '';
   ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v), satbScore.meta.time_signature));
 };

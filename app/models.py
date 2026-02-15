@@ -67,6 +67,14 @@ class ScoreMeasure(BaseModel):
     voices: dict[VoiceName, list[ScoreNote]]
 
 
+class ScoreChord(BaseModel):
+    measure_number: int = Field(ge=1)
+    section_id: str
+    symbol: str
+    degree: int = Field(ge=1, le=7)
+    pitch_classes: list[int] = Field(min_length=3, max_length=3)
+
+
 class ScoreMeta(BaseModel):
     key: str
     time_signature: str
@@ -80,6 +88,7 @@ class CanonicalScore(BaseModel):
     meta: ScoreMeta
     sections: list[ScoreSection]
     measures: list[ScoreMeasure]
+    chord_progression: list[ScoreChord] = Field(default_factory=list)
 
 
 class MelodyResponse(BaseModel):
