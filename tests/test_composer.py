@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from app.services import composer as composer_service
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import generate_melody_score, harmonize_score
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
@@ -230,3 +231,33 @@ def test_preferences_reject_invalid_theory_values():
 
     with pytest.raises(ValidationError):
         CompositionPreferences(key="Am", primary_mode="aeolian")
+
+
+def test_validate_score_supports_primary_mode_diatonic_context():
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="Morning light renews us")],
+        preferences=CompositionPreferences(key="A", primary_mode="aeolian", time_signature="4/4", tempo_bpm=90),
+    )
+    melody = generate_melody_score(req)
+
+    errors_with_mode = validate_score(melody, "aeolian")
+    errors_without_mode = validate_score(melody)
+
+    assert errors_with_mode == []
+    assert any("not diatonic" in err for err in errors_without_mode)
+
+
+def test_generate_melody_failure_uses_friendly_message(monkeypatch):
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="Morning light renews us")],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90),
+    )
+
+    monkeypatch.setattr(composer_service, "MAX_GENERATION_ATTEMPTS", 2)
+    monkeypatch.setattr(composer_service, "validate_score", lambda *_args, **_kwargs: ["raw internal validation detail"])
+
+    with pytest.raises(ValueError) as exc:
+        composer_service.generate_melody_score(req)
+
+    assert "Couldn’t generate a valid melody" in str(exc.value)
+    assert "raw internal validation detail" not in str(exc.value)
