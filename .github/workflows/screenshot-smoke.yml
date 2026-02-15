@@ -1,0 +1,56 @@
+name: Screenshot Smoke Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Install Playwright browsers and OS deps
+        run: python -m playwright install --with-deps chromium firefox webkit
+
+      - name: Start app server
+        run: |
+          mkdir -p artifacts
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > artifacts/server.log 2>&1 &
+          sleep 3
+          curl -f http://127.0.0.1:8000/
+
+      - name: Capture screenshot with fallback engines
+        id: capture
+        continue-on-error: true
+        run: |
+          python scripts/capture_screenshot.py \
+            --url http://127.0.0.1:8000/ \
+            --output artifacts/ui-home.png \
+            --log artifacts/screenshot-capture-log.json
+
+      - name: Upload screenshot artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-artifacts
+          path: |
+            artifacts/ui-home.png
+            artifacts/screenshot-capture-log.json
+            artifacts/server.log
+          if-no-files-found: warn
+
+      - name: Fail job if capture failed
+        if: steps.capture.outcome != 'success'
+        run: exit 1

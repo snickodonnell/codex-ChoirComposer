@@ -46,7 +46,7 @@ def refine_melody_endpoint(payload: RefineRequest):
 def generate_satb_endpoint(payload: HarmonizeRequest):
     try:
         score = harmonize_score(payload.score)
-        return SATBResponse(score=score, harmonization_notes="Diatonic SATB with range and spacing checks.")
+        return SATBResponse(score=score, harmonization_notes="Chord-led SATB voicing with diatonic progression integrity checks.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

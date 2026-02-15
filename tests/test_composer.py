@@ -15,7 +15,7 @@ def _measure_onsets(score, voice="soprano"):
     pos = 0.0
     onsets = []
     for n in [n for m in score.measures for n in m.voices[voice]]:
-        onsets.append((pos % bpb, n))
+        onsets.append((int(pos // bpb) + 1, pos % bpb, n))
         pos += n.beats
     return onsets
 
@@ -58,6 +58,7 @@ def test_generate_melody_and_satb_validate():
     )
     melody = generate_melody_score(req)
     assert melody.meta.stage == "melody"
+    assert melody.chord_progression
     assert validate_score(melody) == []
 
     satb = harmonize_score(melody)
@@ -65,25 +66,24 @@ def test_generate_melody_and_satb_validate():
     assert validate_score(satb) == []
 
 
-def test_stressed_syllables_prefer_strong_beats():
+def test_strong_beats_prefer_chord_tones():
     req = CompositionRequest(
         sections=[LyricSection(label="verse", title="Verse", text="Morning glory rises higher")],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90),
     )
     melody = generate_melody_score(req)
     onsets = _measure_onsets(melody, "soprano")
+    chord_map = {c.measure_number: set(c.pitch_classes) for c in melody.chord_progression}
 
-    stressed_onsets = []
-    for onset, note in onsets:
-        if note.is_rest or not note.lyric_syllable_id:
+    strong = []
+    for measure_number, onset, note in onsets:
+        if note.is_rest:
             continue
-        for sec in melody.sections:
-            for syl in sec.syllables:
-                if syl.id == note.lyric_syllable_id and syl.stressed and note.lyric_mode != "melisma_continue":
-                    stressed_onsets.append(onset)
+        if abs(onset % 2.0) < 1e-9:
+            strong.append(pitch_to_midi(note.pitch) % 12 in chord_map[measure_number])
 
-    assert stressed_onsets
-    assert sum(1 for o in stressed_onsets if abs(o % 1.0) < 1e-9) >= len(stressed_onsets) // 2
+    assert strong
+    assert sum(1 for ok in strong if ok) >= len(strong) * 0.75
 
 
 def test_satb_ranges_order_and_spacing_constraints():
@@ -111,7 +111,7 @@ def test_satb_ranges_order_and_spacing_constraints():
         assert am - tm <= 12
 
 
-def test_musicxml_export_contains_satb_parts():
+def test_musicxml_export_contains_satb_parts_and_harmony():
     req = CompositionRequest(
         sections=[LyricSection(label="chorus", title="Chorus", text="Sing together forever")],
         preferences=CompositionPreferences(),
@@ -123,3 +123,4 @@ def test_musicxml_export_contains_satb_parts():
     assert "<part-name>Alto</part-name>" in xml
     assert "<part-name>Tenor</part-name>" in xml
     assert "<part-name>Bass</part-name>" in xml
+    assert "<harmony>" in xml

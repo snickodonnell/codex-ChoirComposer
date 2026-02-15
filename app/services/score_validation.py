@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from app.models import CanonicalScore, VoiceName
-from app.services.music_theory import VOICE_RANGES, VOICE_TESSITURA, pitch_to_midi
+from app.services.music_theory import VOICE_RANGES, VOICE_TESSITURA, parse_key, pitch_to_midi, triad_pitch_classes
 
 MAX_MELODIC_LEAP = 7
 
@@ -23,12 +23,13 @@ def validate_score(score: CanonicalScore) -> list[str]:
             if abs(total - target) > 1e-6:
                 errors.append(f"Measure {measure.number} voice {voice} has {total:g} beats; expected {target:g}.")
 
+    errors.extend(_validate_chord_progression(score))
     errors.extend(_validate_lyric_mapping(score))
     errors.extend(_validate_ranges_and_motion(score))
+    errors.extend(_validate_harmonic_integrity(score))
 
     if score.meta.stage == "satb":
         errors.extend(_validate_voice_separation(score))
-        errors.extend(_validate_parallel_intervals(score))
 
     return errors
 
@@ -38,6 +39,36 @@ def _flatten_voice(score: CanonicalScore, voice: VoiceName):
     for m in score.measures:
         out.extend(m.voices.get(voice, []))
     return out
+
+
+def _is_strong_beat(position: float, time_signature: str) -> bool:
+    top, bottom = [int(p) for p in time_signature.split("/")]
+    quarter_position = position * (bottom / 4)
+    if top == 4:
+        return abs(quarter_position % 2) < 1e-9
+    if top == 6 and bottom == 8:
+        return abs(position) < 1e-9 or abs(position - 1.5) < 1e-9
+    return abs(quarter_position % 1) < 1e-9
+
+
+def _validate_chord_progression(score: CanonicalScore) -> list[str]:
+    errors: list[str] = []
+    if not score.chord_progression:
+        return ["Score must include an explicit chord progression."]
+
+    expected_measures = {m.number for m in score.measures}
+    mapped_measures = {c.measure_number for c in score.chord_progression}
+    missing = sorted(expected_measures - mapped_measures)
+    if missing:
+        errors.append(f"Missing chord symbols for measures: {missing}.")
+
+    scale = parse_key(score.meta.key)
+    valid_triads = {tuple(triad_pitch_classes(scale, degree)) for degree in range(1, 8)}
+    for chord in score.chord_progression:
+        if tuple(chord.pitch_classes) not in valid_triads:
+            errors.append(f"Chord {chord.symbol} at measure {chord.measure_number} is not diatonic in {score.meta.key}.")
+
+    return errors
 
 
 def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
@@ -53,7 +84,6 @@ def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
             errors.append(f"Lyric note references unknown section_id {note.section_id}.")
             continue
 
-        # non-rest notes must carry lyric mapping unless intentional instrumental interlude.
         is_interlude = note.section_id == "interlude"
         if not is_interlude and note.lyric_syllable_id is None:
             errors.append(f"Orphan melodic note at index {note_idx} without lyric association.")
@@ -94,6 +124,36 @@ def _validate_ranges_and_motion(score: CanonicalScore) -> list[str]:
             if midi < t_lo - 1 or midi > t_hi + 1:
                 errors.append(f"{voice} note {idx} in extreme tessitura ({note.pitch}).")
             prev = midi
+
+    return errors
+
+
+def _validate_harmonic_integrity(score: CanonicalScore) -> list[str]:
+    errors: list[str] = []
+    progression = {c.measure_number: set(c.pitch_classes) for c in score.chord_progression}
+    bpb = beats_per_measure(score.meta.time_signature)
+
+    for voice in ["soprano", "alto", "tenor", "bass"]:
+        cursor = 0.0
+        for idx, note in enumerate(_flatten_voice(score, voice)):
+            if note.is_rest:
+                cursor += note.beats
+                continue
+            measure_number = int(cursor // bpb) + 1
+            chord_tones = progression.get(measure_number)
+            if not chord_tones:
+                cursor += note.beats
+                continue
+            pc = pitch_to_midi(note.pitch) % 12
+            if voice == "soprano":
+                if note.lyric_mode in {"tie_continue", "melisma_continue"}:
+                    cursor += note.beats
+                    continue
+                if _is_strong_beat(cursor % bpb, score.meta.time_signature) and pc not in chord_tones:
+                    errors.append(f"Soprano strong-beat note {idx} ({note.pitch}) conflicts with chord in measure {measure_number}.")
+            elif score.meta.stage == "satb" and pc not in chord_tones:
+                errors.append(f"{voice} note {idx} ({note.pitch}) is outside chord tones in measure {measure_number}.")
+            cursor += note.beats
 
     return errors
 

@@ -27,6 +27,8 @@ SEMITONE_TO_NOTE = {v: k for k, v in NOTE_TO_SEMITONE.items() if len(k) == 1 or 
 
 MAJOR_PATTERN = [0, 2, 4, 5, 7, 9, 11]
 MINOR_PATTERN = [0, 2, 3, 5, 7, 8, 10]
+MAJOR_TRIAD_QUALITIES = ["", "m", "m", "", "", "m", "dim"]
+MINOR_TRIAD_QUALITIES = ["m", "dim", "", "m", "m", "", ""]
 
 DEFAULT_KEYS = ["C", "G", "D", "F", "Bb", "A"]
 DEFAULT_TIME_SIGNATURES = ["4/4", "3/4", "6/8"]
@@ -57,6 +59,20 @@ class Scale:
         base = NOTE_TO_SEMITONE[self.tonic]
         pattern = MINOR_PATTERN if self.is_minor else MAJOR_PATTERN
         return [(base + p) % 12 for p in pattern]
+
+
+def triad_pitch_classes(scale: Scale, degree: int) -> list[int]:
+    idx = (degree - 1) % 7
+    semis = scale.semitones
+    return [semis[idx], semis[(idx + 2) % 7], semis[(idx + 4) % 7]]
+
+
+def chord_symbol(scale: Scale, degree: int) -> str:
+    idx = (degree - 1) % 7
+    root_pc = scale.semitones[idx]
+    root = SEMITONE_TO_NOTE[root_pc]
+    quality = (MINOR_TRIAD_QUALITIES if scale.is_minor else MAJOR_TRIAD_QUALITIES)[idx]
+    return f"{root}{quality}"
 
 
 def tokenize_lyrics(text: str) -> list[str]:

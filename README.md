@@ -68,3 +68,19 @@ pytest
 
 ## Lyric rhythm policy controls
 `plan_syllable_rhythm` uses a deterministic `RhythmPolicyConfig` (`melismaRate`, `subdivisionRate`, `phraseEndHoldBeats`, `preferStrongBeatForStress`) derived from section type and a user preset (`syllabic`, `mixed`, `melismatic`).
+
+## Playwright screenshots in containers / Codespaces
+For reliable screenshots in containerized environments (where Chromium can crash due to sandbox or `/dev/shm` constraints), use the fallback screenshot helper:
+
+```bash
+python scripts/capture_screenshot.py \
+  --url http://127.0.0.1:8000/ \
+  --output artifacts/ui-home.png
+```
+
+The helper:
+- launches Chromium with container-safe flags (`--no-sandbox`, `--disable-dev-shm-usage`, etc.),
+- falls back to Firefox/WebKit if Chromium fails,
+- writes a JSON capture log at `artifacts/screenshot-capture-log.json`.
+
+In CI, `.github/workflows/screenshot-smoke.yml` installs Playwright OS dependencies and all browser engines, captures a screenshot, and always uploads artifacts (including logs) even when capture fails.
