@@ -77,6 +77,98 @@ def test_generate_melody_enables_playback_even_if_sheet_rendering_breaks():
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
 
 
+
+
+def test_generate_melody_works_with_default_ui_seed_data_without_manual_input():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                section_count = page.evaluate(
+                    """
+                    () => document.querySelectorAll('#sections .section-row').length
+                    """
+                )
+                arrangement_count = page.evaluate(
+                    """
+                    () => document.querySelectorAll('#arrangementList .arrangement-item').length
+                    """
+                )
+
+                assert section_count >= 3
+                assert arrangement_count >= 3
+
+                page.click("#generateMelody")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                      return meta.trim().length > 0;
+                    }
+                    """,
+                    timeout=20000,
+                )
+
+                errors = page.evaluate(
+                    """
+                    () => document.querySelector('#formErrors')?.textContent || ''
+                    """
+                )
+                assert "Please add lyrics" not in errors
+                assert page.locator("#playMelody").is_disabled() is False
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+
+def test_loading_seed_data_resets_generated_workflow_state():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        with playwright.sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.click("#generateMelody")
+            page.wait_for_function(
+                """
+                () => {
+                  const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                  return meta.trim().length > 0;
+                }
+                """,
+                timeout=20000,
+            )
+
+            assert page.locator("#playMelody").is_disabled() is False
+
+            page.click("#loadTestData")
+
+            assert page.locator("#playMelody").is_disabled() is True
+            melody_meta = page.locator("#melodyMeta").text_content() or ""
+            satb_meta = page.locator("#satbMeta").text_content() or ""
+            assert melody_meta.strip() == ""
+            assert satb_meta.strip() == ""
+
+            page.click("#generateMelody")
+            page.wait_for_function(
+                """
+                () => {
+                  const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                  return meta.trim().length > 0;
+                }
+                """,
+                timeout=20000,
+            )
+            assert page.locator("#playMelody").is_disabled() is False
+            browser.close()
+
 def test_regenerate_clusters_defaults_to_all_selected_and_melody_generation_still_works():
     playwright = pytest.importorskip("playwright.sync_api")
 
