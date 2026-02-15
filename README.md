@@ -69,6 +69,11 @@ pytest
 ## Lyric rhythm policy controls
 `plan_syllable_rhythm` uses a deterministic `RhythmPolicyConfig` (`melismaRate`, `subdivisionRate`, `phraseEndHoldBeats`, `preferStrongBeatForStress`) derived from section type and a user preset (`syllabic`, `mixed`, `melismatic`).
 
+
+## Developer note: avoid import shadowing
+When adding new Python modules, avoid naming files after common third-party packages (for example: `pydantic.py`, `fastapi.py`, or `requests.py`).
+These names can shadow installed dependencies on Python import paths and cause confusing runtime import failures.
+
 ## Playwright screenshots in containers / Codespaces
 For reliable screenshots in containerized environments (where Chromium can crash due to sandbox or `/dev/shm` constraints), use the fallback screenshot helper:
 
