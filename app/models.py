@@ -178,6 +178,8 @@ class RefineRequest(BaseModel):
     score: CanonicalScore
     instruction: str = Field(min_length=3, max_length=300)
     regenerate: bool = False
+    selected_clusters: list[str] = Field(default_factory=list)
+    section_clusters: dict[str, str] = Field(default_factory=dict)
 
 
 class SATBResponse(BaseModel):

@@ -350,6 +350,61 @@ def _auto_repair_melody_score(score: CanonicalScore, primary_mode: str | None) -
     return score
 
 
+def _measure_count_by_section(score: CanonicalScore) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chord in score.chord_progression:
+        counts[chord.section_id] = counts.get(chord.section_id, 0) + 1
+    return counts
+
+
+def _regenerate_progression_for_clusters(
+    score: CanonicalScore,
+    section_clusters: dict[str, str],
+    selected_clusters: list[str],
+) -> list[ScoreChord]:
+    if not score.chord_progression:
+        return []
+
+    scale = parse_key(score.meta.key, score.meta.primary_mode)
+    requested = {cluster.strip() for cluster in selected_clusters if cluster and cluster.strip()}
+    available = {
+        section_clusters.get(section.id, section.label)
+        for section in score.sections
+        if section_clusters.get(section.id, section.label)
+    }
+    target_clusters = requested or available
+
+    measure_counts = _measure_count_by_section(score)
+    regenerated_cycles: dict[str, list[int]] = {}
+    regenerated: list[ScoreChord] = []
+
+    for section in score.sections:
+        section_id = section.id
+        cluster = section_clusters.get(section_id, section.label)
+        section_chords = [c for c in score.chord_progression if c.section_id == section_id]
+        if not section_chords:
+            continue
+        section_chords = sorted(section_chords, key=lambda chord: chord.measure_number)
+        measure_count = measure_counts.get(section_id, len(section_chords))
+
+        if cluster in target_clusters:
+            cycle = regenerated_cycles.get(cluster)
+            if cycle is None:
+                base_cycle = _cluster_progression_cycle(scale, cluster)
+                rotation = random.randrange(len(base_cycle))
+                cycle = base_cycle[rotation:] + base_cycle[:rotation]
+                if random.random() > 0.5:
+                    cycle = list(reversed(cycle))
+                regenerated_cycles[cluster] = cycle
+            start_measure = section_chords[0].measure_number
+            regenerated.extend(_build_section_progression(scale, section_id, start_measure, measure_count, cycle))
+            continue
+
+        regenerated.extend(section_chords)
+
+    return sorted(regenerated, key=lambda chord: chord.measure_number)
+
+
 def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
@@ -521,9 +576,21 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     )
 
 
-def refine_score(score: CanonicalScore, instruction: str, regenerate: bool) -> CanonicalScore:
+def refine_score(
+    score: CanonicalScore,
+    instruction: str,
+    regenerate: bool,
+    selected_clusters: list[str] | None = None,
+    section_clusters: dict[str, str] | None = None,
+) -> CanonicalScore:
     random.seed(instruction)
     scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
+    if regenerate:
+        score.chord_progression = _regenerate_progression_for_clusters(
+            score,
+            section_clusters or {},
+            selected_clusters or [],
+        )
     progression = {c.measure_number: c for c in score.chord_progression}
     bpb = beats_per_measure(score.meta.time_signature)
     prev = None
