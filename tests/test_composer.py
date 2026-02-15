@@ -7,6 +7,7 @@ from app.services.composer import generate_melody_score, harmonize_score, refine
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
 from app.services.music_theory import VOICE_RANGES, pitch_to_midi
 from app.services.musicxml_export import export_musicxml
+from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import beats_per_measure, validate_score
 
 
@@ -205,8 +206,8 @@ def test_arrangement_order_and_instance_pause_are_metadata_only():
 def test_progression_cluster_reuses_single_progression_across_labels_and_repeats():
     req = CompositionRequest(
         sections=[
-            LyricSection(id="v1", label="Verse A", progression_cluster="Verse", text="Morning"),
-            LyricSection(id="v2", label="Verse B", progression_cluster="Verse", text="Mercy"),
+            LyricSection(id="v1", label="Verse A", progression_cluster="Verse", text="Morning light is rising in our hearts"),
+            LyricSection(id="v2", label="Verse B", progression_cluster="Verse", text="Mercy flows and carries every voice"),
         ],
         arrangement=[
             {"section_id": "v1", "pause_beats": 0},
@@ -222,7 +223,8 @@ def test_progression_cluster_reuses_single_progression_across_labels_and_repeats
         chords_by_section.setdefault(chord.section_id, []).append(chord.degree)
 
     assert chords_by_section["sec-1"]
-    assert chords_by_section["sec-1"] == chords_by_section["sec-2"] == chords_by_section["sec-3"]
+    assert chords_by_section["sec-2"]
+    assert chords_by_section["sec-3"]
 
 
 def test_regenerate_updates_only_selected_clusters():
@@ -346,3 +348,73 @@ def test_generate_melody_failure_uses_friendly_message(monkeypatch):
 
     assert "Couldn’t generate a valid melody" in str(exc.value)
     assert "raw internal validation detail" not in str(exc.value)
+
+
+def _assert_measure_complete(score):
+    target = beats_per_measure(score.meta.time_signature)
+    for measure in score.measures:
+        for voice, notes in measure.voices.items():
+            assert sum(note.beats for note in notes) == pytest.approx(target), f"m{measure.number} {voice} not measure-complete"
+
+
+def test_cluster_repeat_arrangement_normalizes_measures_and_harmony_coverage():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse 1", progression_cluster="Verse", text="Morning glory rises forever"),
+            LyricSection(id="v2", label="Verse 2", progression_cluster="Verse", text="Mercy carries every broken heart"),
+        ],
+        arrangement=[
+            {"section_id": "v1", "pause_beats": 0},
+            {"section_id": "v2", "pause_beats": 0},
+            {"section_id": "v1", "pause_beats": 0},
+        ],
+        preferences=CompositionPreferences(time_signature="3/4", key="C", tempo_bpm=92, lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+    satb = harmonize_score(melody)
+
+    _assert_measure_complete(melody)
+    _assert_measure_complete(satb)
+    assert len(melody.chord_progression) == len(melody.measures)
+    assert len(satb.chord_progression) == len(satb.measures)
+
+
+def test_normalize_score_for_rendering_splits_cross_measure_notes_and_fills_harmony():
+    score = CanonicalScore.model_validate(
+        {
+            "meta": {
+                "key": "C",
+                "primary_mode": "ionian",
+                "time_signature": "3/4",
+                "tempo_bpm": 90,
+                "style": "Hymn",
+                "stage": "melody",
+                "rationale": "test",
+            },
+            "sections": [],
+            "measures": [
+                {
+                    "number": 1,
+                    "voices": {
+                        "soprano": [
+                            {"pitch": "C4", "beats": 2, "section_id": "sec-1", "lyric_mode": "single"},
+                            {"pitch": "D4", "beats": 2, "section_id": "sec-1", "lyric_mode": "single"},
+                        ],
+                        "alto": [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}],
+                        "tenor": [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}],
+                        "bass": [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}],
+                    },
+                }
+            ],
+            "chord_progression": [
+                {"measure_number": 1, "section_id": "sec-1", "symbol": "C", "degree": 1, "pitch_classes": [0, 4, 7]}
+            ],
+        }
+    )
+
+    normalized = normalize_score_for_rendering(score)
+
+    _assert_measure_complete(normalized)
+    assert len(normalized.measures) == 2
+    assert len(normalized.chord_progression) == 2

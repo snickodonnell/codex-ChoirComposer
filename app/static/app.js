@@ -194,7 +194,7 @@ function updateDraftVersionOptions() {
 }
 
 function renderMelody(score, heading = 'Melody') {
-  melodyScore = score;
+  melodyScore = normalizeScoreForRendering(score);
   document.getElementById('melodySheet').innerHTML = '';
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
@@ -429,6 +429,85 @@ function flattenVoice(score, voice, { includeRests = false } = {}) {
 }
 
 
+function normalizeScoreForRendering(score) {
+  const { beatsPerMeasure } = parseTimeSignature(score?.meta?.time_signature);
+  const voices = ['soprano', 'alto', 'tenor', 'bass'];
+  const normalized = structuredClone(score);
+
+  const normalizedByVoice = Object.fromEntries(voices.map((voice) => [voice, []]));
+  let maxMeasures = 0;
+
+  voices.forEach((voice) => {
+    const source = flattenVoice(score, voice, { includeRests: true });
+    if (!source.length) return;
+
+    let current = [];
+    let used = 0;
+    source.forEach((note) => {
+      let remaining = Number(note.beats) || 0;
+      let firstChunk = true;
+      while (remaining > 0.0001) {
+        const room = Math.max(0, beatsPerMeasure - used);
+        if (room < 0.0001) {
+          normalizedByVoice[voice].push(current);
+          current = [];
+          used = 0;
+          continue;
+        }
+        const chunk = Math.min(remaining, room);
+        const clone = { ...note, beats: chunk };
+        if (!clone.is_rest && !firstChunk) {
+          clone.lyric = null;
+          clone.lyric_mode = 'tie_continue';
+        }
+        current.push(clone);
+        remaining -= chunk;
+        used += chunk;
+        firstChunk = false;
+        if (used >= beatsPerMeasure - 0.0001) {
+          normalizedByVoice[voice].push(current);
+          current = [];
+          used = 0;
+        }
+      }
+    });
+
+    if (current.length) {
+      if (used < beatsPerMeasure - 0.0001) {
+        current.push({ pitch: 'REST', beats: beatsPerMeasure - used, is_rest: true, section_id: 'padding', lyric_mode: 'none' });
+      }
+      normalizedByVoice[voice].push(current);
+    }
+
+    maxMeasures = Math.max(maxMeasures, normalizedByVoice[voice].length);
+  });
+
+  if (maxMeasures === 0) return normalized;
+
+  voices.forEach((voice) => {
+    while (normalizedByVoice[voice].length < maxMeasures) {
+      normalizedByVoice[voice].push([{ pitch: 'REST', beats: beatsPerMeasure, is_rest: true, section_id: 'padding', lyric_mode: 'none' }]);
+    }
+  });
+
+  normalized.measures = Array.from({ length: maxMeasures }, (_, idx) => ({
+    number: idx + 1,
+    voices: Object.fromEntries(voices.map((voice) => [voice, normalizedByVoice[voice][idx]])),
+  }));
+
+  const byMeasure = new Map((normalized.chord_progression || []).map((ch) => [ch.measure_number, ch]));
+  normalized.chord_progression = Array.from({ length: maxMeasures }, (_, idx) => byMeasure.get(idx + 1) || {
+    measure_number: idx + 1,
+    section_id: normalized.measures[idx].voices.soprano[0]?.section_id || 'padding',
+    symbol: 'C',
+    degree: 1,
+    pitch_classes: [0, 4, 7],
+  });
+
+  return normalized;
+}
+
+
 function formatChordLine(score) {
   if (!score?.chord_progression?.length) return 'Chord progression: —';
   return `Chord progression: ${score.chord_progression.map(c => `m${c.measure_number}:${c.symbol}`).join(' | ')}`;
@@ -542,7 +621,7 @@ function drawStaff(containerId, title, notes, timeSignature, boundaryMap = new M
     return;
   }
   const { display } = parseTimeSignature(timeSignature);
-  system.addStave({ voices: [score.voice(score.notes(staveNotes.join(', ')))] }).addClef('treble').addTimeSignature(display);
+  system.addStave({ voices: [score.voice(score.notes(staveNotes.join(', ')), { time: display })] }).addClef('treble').addTimeSignature(display);
   factory.draw();
 
   const lyricLine = document.createElement('div');
@@ -632,9 +711,14 @@ function safeRenderMelody(score, heading) {
   try {
     renderMelody(score, heading);
     return true;
-  } catch (error) {
-    showErrors([`Melody generated, but sheet rendering failed: ${String(error.message || error)}`]);
-    return false;
+  } catch (_) {
+    try {
+      renderMelody(normalizeScoreForRendering(score), heading);
+      return true;
+    } catch (_) {
+      showErrors(['Melody generated, but sheet rendering is temporarily unavailable. Playback/export still work.']);
+      return false;
+    }
   }
 }
 
@@ -759,7 +843,7 @@ generateSATBBtn.onclick = async () => {
   }
   const res = await post('/api/generate-satb', { score: melodyScore });
   const payload = await res.json();
-  satbScore = payload.score;
+  satbScore = normalizeScoreForRendering(payload.score);
   satbMeta.textContent = JSON.stringify({ ...satbScore.meta, harmonization: payload.harmonization_notes }, null, 2);
   document.getElementById('satbChords').textContent = formatChordLine(satbScore);
   updateActionAvailability();
@@ -767,8 +851,14 @@ generateSATBBtn.onclick = async () => {
   try {
     const boundaryMap = buildSectionBoundaryMap(satbScore);
     ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
-  } catch (error) {
-    showErrors([`SATB generated, but score rendering failed: ${String(error.message || error)}`]);
+  } catch (_) {
+    try {
+      satbScore = normalizeScoreForRendering(satbScore);
+      const boundaryMap = buildSectionBoundaryMap(satbScore);
+      ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
+    } catch (_) {
+      showErrors(['SATB generated, but score rendering is temporarily unavailable. Playback/export still work.']);
+    }
   }
 };
 

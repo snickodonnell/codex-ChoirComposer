@@ -16,6 +16,7 @@ from app.models import (
 from app.services.composer import generate_melody_score, harmonize_score, refine_score
 from app.services.musicxml_export import export_musicxml
 from app.services.pdf_export import build_score_pdf
+from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score
 
 app = FastAPI(title="Choir Composer")
@@ -28,7 +29,7 @@ def _require_score_stage(score, expected_stage: str, action: str) -> None:
 
 
 def _require_valid_score(score, action: str) -> None:
-    errors = validate_score(score)
+    errors = validate_score(normalize_score_for_rendering(score))
     if errors:
         raise ValueError(f"{action} requires a valid input score. Resolve validation errors before continuing.")
 
@@ -41,7 +42,7 @@ def index() -> FileResponse:
 @app.post("/api/generate-melody", response_model=MelodyResponse)
 def generate_melody_endpoint(payload: CompositionRequest):
     try:
-        return MelodyResponse(score=generate_melody_score(payload))
+        return MelodyResponse(score=normalize_score_for_rendering(generate_melody_score(payload)))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -52,13 +53,13 @@ def refine_melody_endpoint(payload: RefineRequest):
         _require_score_stage(payload.score, "melody", "Melody refinement")
         _require_valid_score(payload.score, "Melody refinement")
         return MelodyResponse(
-            score=refine_score(
+            score=normalize_score_for_rendering(refine_score(
                 payload.score,
                 payload.instruction,
                 payload.regenerate,
                 payload.selected_clusters,
                 payload.section_clusters,
-            )
+            ))
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -69,7 +70,7 @@ def generate_satb_endpoint(payload: HarmonizeRequest):
     try:
         _require_score_stage(payload.score, "melody", "SATB generation")
         _require_valid_score(payload.score, "SATB generation")
-        score = harmonize_score(payload.score)
+        score = normalize_score_for_rendering(harmonize_score(payload.score))
         return SATBResponse(score=score, harmonization_notes="Chord-led SATB voicing with diatonic progression integrity checks.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -78,8 +79,8 @@ def generate_satb_endpoint(payload: HarmonizeRequest):
 @app.post("/api/compose-end-score", response_model=EndScoreResponse)
 def compose_end_score_endpoint(payload: CompositionRequest):
     try:
-        melody = generate_melody_score(payload)
-        satb = harmonize_score(melody)
+        melody = normalize_score_for_rendering(generate_melody_score(payload))
+        satb = normalize_score_for_rendering(harmonize_score(melody))
         return EndScoreResponse(
             melody=melody,
             satb=satb,
@@ -91,7 +92,7 @@ def compose_end_score_endpoint(payload: CompositionRequest):
 
 @app.post("/api/validate-score")
 def validate_score_endpoint(payload: HarmonizeRequest):
-    errors = validate_score(payload.score)
+    errors = validate_score(normalize_score_for_rendering(payload.score))
     return {"valid": len(errors) == 0, "errors": errors}
 
 
@@ -103,7 +104,7 @@ def export_pdf_endpoint(payload: PDFExportRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    content = build_score_pdf(payload.score)
+    content = build_score_pdf(normalize_score_for_rendering(payload.score))
     return Response(
         content=content,
         media_type="application/pdf",
@@ -119,7 +120,7 @@ def export_musicxml_endpoint(payload: PDFExportRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    content = export_musicxml(payload.score)
+    content = export_musicxml(normalize_score_for_rendering(payload.score))
     return Response(
         content=content,
         media_type="application/vnd.recordare.musicxml+xml",
