@@ -260,7 +260,7 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
             (
                 (section.id or f"section-{idx}"),
                 section.label,
-                section.progression_cluster or section.label,
+                section.label,
                 section.pause_beats,
             )
             for idx, section in enumerate(req.sections, start=1)
@@ -271,7 +271,7 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
         section = section_defs.get(item.section_id)
         if section is None:
             raise ValueError(f"Arrangement references unknown section_id: {item.section_id}")
-        expanded.append((item.section_id, section.label, section.progression_cluster or section.label, item.pause_beats))
+        expanded.append((item.section_id, section.label, item.progression_cluster or section.label, item.pause_beats))
 
     return expanded
 
