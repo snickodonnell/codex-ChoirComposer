@@ -19,6 +19,7 @@ const generateSATBBtn = document.getElementById('generateSATB');
 const playSATBBtn = document.getElementById('playSATB');
 const exportPDFBtn = document.getElementById('exportPDF');
 const exportMusicXMLBtn = document.getElementById('exportMusicXML');
+const loadTestDataBtn = document.getElementById('loadTestData');
 
 const formErrorsEl = document.getElementById('formErrors');
 const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
@@ -27,6 +28,17 @@ let sectionIdCounter = 0;
 const MAX_DRAFT_VERSIONS = 20;
 let melodyDraftVersions = [];
 let activeDraftVersionId = null;
+
+function resolveApiBaseUrl() {
+  if (window.location.protocol === 'file:') {
+    return 'http://127.0.0.1:8000';
+  }
+  return '';
+}
+
+function apiUrl(path) {
+  return `${resolveApiBaseUrl()}${path}`;
+}
 
 function clearValidationHighlights() {
   document.querySelectorAll('.field-error').forEach((el) => el.classList.remove('field-error'));
@@ -294,6 +306,42 @@ function refreshArrangementLabels() {
     meta.textContent = `${idx + 1}. ${describeSection(item.dataset.sectionId)}`;
   });
   refreshRegenerateClusterOptions();
+}
+
+function clearSectionsAndArrangement() {
+  sectionsEl.innerHTML = '';
+  arrangementListEl.innerHTML = '';
+  refreshArrangementLibrarySelect();
+  refreshRegenerateClusterOptions();
+}
+
+function loadHymnTestData() {
+  const sections = [
+    { label: 'verse', text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
+    { label: 'verse', text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
+    { label: 'chorus', text: 'Praise God, praise God\nWe sing with grateful voices' },
+  ];
+
+  clearSectionsAndArrangement();
+  sections.forEach((section) => addSectionRow(section.label, section.text));
+
+  const rows = getSectionRows();
+  addArrangementItem(rows[0]?.dataset.sectionId, 0, 'Verse A');
+  addArrangementItem(rows[1]?.dataset.sectionId, 0, 'Verse B');
+  addArrangementItem(rows[2]?.dataset.sectionId, 0, 'Refrain');
+
+  document.getElementById('key').value = 'G';
+  document.getElementById('primaryMode').value = 'major';
+  document.getElementById('time').value = '3/4';
+  document.getElementById('tempo').value = '88';
+  document.getElementById('mood').value = 'Prayerful';
+  document.getElementById('lyricPreset').value = 'syllabic';
+  document.getElementById('instruction').value = 'Keep a reverent, singable contour.';
+
+  clearValidationHighlights();
+  showErrors([]);
+  refreshArrangementLibrarySelect();
+  refreshArrangementLabels();
 }
 
 function setSectionMode(row, isSaved) {
@@ -666,7 +714,12 @@ function drawStaff(containerId, title, notes, timeSignature, boundaryMap = new M
 }
 
 async function post(url, payload) {
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  let res;
+  try {
+    res = await fetch(apiUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  } catch (_) {
+    throw new Error('Failed to fetch. Confirm the API server is running and reachable, then refresh and try again.');
+  }
   if (!res.ok) {
     const text = await res.text();
     let message = text;
@@ -774,13 +827,11 @@ async function playNotes(noteObjects, poly = false) {
 
 document.getElementById('addSection').onclick = () => addSectionRow();
 document.getElementById('addArrangementItem').onclick = () => addArrangementItem(arrangementSectionSelectEl.value);
+if (loadTestDataBtn) loadTestDataBtn.onclick = loadHymnTestData;
 
-addSectionRow('verse', 'Light in the morning fills every heart');
-addSectionRow('chorus', 'Sing together, hope forever');
+addSectionRow('verse', '');
 refreshArrangementLibrarySelect();
 addArrangementItem(getSectionRows()[0]?.dataset.sectionId, 0);
-addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
-addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
 refreshRegenerateClusterOptions();
 updateDraftVersionOptions();
 updateActionAvailability();
