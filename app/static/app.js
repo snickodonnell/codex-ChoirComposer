@@ -151,11 +151,14 @@ function getArrangementClusters() {
 }
 
 function refreshRegenerateClusterOptions() {
+  const previousOptions = [...regenerateClustersEl.options].map((o) => o.value);
   const selected = new Set([...regenerateClustersEl.selectedOptions].map((o) => o.value));
   const clusters = getArrangementClusters();
+  const shouldDefaultSelectAll = selected.size === 0 || (previousOptions.length > 0 && selected.size === previousOptions.length);
+
   regenerateClustersEl.innerHTML = clusters.map((cluster) => `<option value="${cluster}">${cluster}</option>`).join('');
   [...regenerateClustersEl.options].forEach((option) => {
-    option.selected = selected.has(option.value);
+    option.selected = shouldDefaultSelectAll ? true : selected.has(option.value);
   });
 }
 
@@ -203,7 +206,7 @@ function upsertActiveVersion(score, label) {
   if (!current) return;
   current.score = score;
   current.label = label;
-  renderMelody(score, label);
+  safeRenderMelody(score, label);
   updateDraftVersionOptions();
 }
 
@@ -219,7 +222,7 @@ function appendDraftVersion(score, sectionClusterMap, label) {
     melodyDraftVersions = melodyDraftVersions.slice(melodyDraftVersions.length - MAX_DRAFT_VERSIONS);
   }
   activeDraftVersionId = version.id;
-  renderMelody(score, label);
+  safeRenderMelody(score, label);
   updateDraftVersionOptions();
 }
 
@@ -445,11 +448,17 @@ function drawStaff(containerId, title, notes, timeSignature) {
   wrap.appendChild(heading);
 
   const vfDiv = document.createElement('div');
+  const vfDivId = `${containerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  vfDiv.id = vfDivId;
   wrap.appendChild(vfDiv);
   root.appendChild(wrap);
 
-  const { Factory } = Vex.Flow;
-  const factory = new Factory({ renderer: { elementId: vfDiv, width: 920, height: 180 } });
+  const vexRoot = window.Vex?.Flow ? window.Vex.Flow : window.Vex;
+  if (!vexRoot?.Factory) {
+    throw new Error('VexFlow failed to load. Staff rendering is unavailable.');
+  }
+  const { Factory } = vexRoot;
+  const factory = new Factory({ renderer: { elementId: vfDivId, width: 920, height: 180 } });
   const score = factory.EasyScore();
   const system = factory.System({ x: 10, y: 20, width: 880 });
 
@@ -534,6 +543,16 @@ function updateActionAvailability() {
   setButtonEnabled(exportMusicXMLBtn, hasSatb, 'Generate SATB first.');
 
   updateWorkflowStatus();
+}
+
+function safeRenderMelody(score, heading) {
+  try {
+    renderMelody(score, heading);
+    return true;
+  } catch (error) {
+    showErrors([`Melody generated, but sheet rendering failed: ${String(error.message || error)}`]);
+    return false;
+  }
 }
 
 function resetSatbStage() {
@@ -636,7 +655,7 @@ draftVersionSelectEl.onchange = () => {
   const version = melodyDraftVersions.find((item) => item.id === selectedId);
   if (!version) return;
   activeDraftVersionId = version.id;
-  renderMelody(version.score, version.label);
+  safeRenderMelody(version.score, version.label);
   resetSatbStage();
   updateActionAvailability();
 };
