@@ -28,6 +28,7 @@ MODE_FAMILIES = {
 class LyricSection(BaseModel):
     id: str | None = Field(default=None, min_length=1, max_length=120)
     label: SectionLabel = Field(min_length=1, max_length=80)
+    progression_cluster: str | None = Field(default=None, min_length=1, max_length=80)
     pause_beats: float = Field(default=0, ge=0, le=4)
     text: str = Field(min_length=1)
 
