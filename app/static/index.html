@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Choir Composer</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
+    <script src="https://unpkg.com/vexflow@4.2.5/build/cjs/vexflow.js"></script>
+  </head>
+  <body>
+    <main class="container">
+      <h1>AI-Assisted Choir Composer</h1>
+      <section class="card">
+        <h2>1) Lyrics + Structure</h2>
+        <div id="sections"></div>
+        <button id="addSection">Add Section</button>
+      </section>
+
+      <section class="card grid">
+        <div>
+          <label>Style <input id="style" value="Contemporary Worship" /></label>
+          <label>Mood <input id="mood" value="Uplifting" /></label>
+          <label>Lyric Rhythm Preset
+            <select id="lyricPreset">
+              <option value="syllabic">Syllabic</option>
+              <option value="mixed" selected>Mixed</option>
+              <option value="melismatic">Melismatic</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <label>Key (optional) <input id="key" placeholder="e.g. D or Am" /></label>
+          <label>Time Signature (optional) <input id="time" placeholder="e.g. 4/4" /></label>
+          <label>Tempo BPM (optional) <input id="tempo" type="number" min="50" max="220" /></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>2) Melody Draft</h2>
+        <button id="generateMelody">Generate Melody</button>
+        <div class="actions">
+          <input id="instruction" placeholder="e.g. make chorus higher and calmer" />
+          <button id="refine">Refine</button>
+          <button id="regenerate">Regenerate</button>
+        </div>
+        <pre id="melodyMeta"></pre>
+        <div id="melodySheet"></div>
+        <button id="playMelody">Play Melody</button>
+      </section>
+
+      <section class="card">
+        <h2>3) SATB Harmonization</h2>
+        <button id="generateSATB">Generate SATB</button>
+        <pre id="satbMeta"></pre>
+        <div id="satbSheet"></div>
+        <button id="playSATB">Play SATB</button>
+      </section>
+
+      <section class="card">
+        <h2>4) Export</h2>
+        <button id="exportPDF">Download PDF</button>
+        <button id="exportMusicXML">Download MusicXML</button>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
