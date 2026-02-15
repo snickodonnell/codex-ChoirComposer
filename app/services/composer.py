@@ -139,7 +139,7 @@ def _nearest_pitch_class_with_leap(target: int, previous: int, pitch_classes: se
     return min(candidates, key=lambda m: (abs(m - target), abs(m - previous), m))
 
 
-def _build_section_progression(scale, section_label: str, section_id: str, start_measure: int, measure_count: int) -> list[ScoreChord]:
+def _cluster_progression_cycle(_scale, cluster_label: str) -> list[int]:
     templates = {
         "verse": [1, 4, 5, 6],
         "chorus": [1, 5, 6, 4],
@@ -149,19 +149,15 @@ def _build_section_progression(scale, section_label: str, section_id: str, start
         "outro": [1, 4, 1, 5],
         "custom": [1, 6, 4, 5],
     }
-    pool = templates.get(section_label, templates["custom"])
-    rng = random.Random(f"{scale.tonic}-{section_label}-{section_id}-{measure_count}")
+    archetype = section_archetype(cluster_label)
+    return templates.get(archetype, templates["custom"])
+
+
+def _build_section_progression(scale, section_id: str, start_measure: int, measure_count: int, cluster_cycle: list[int]) -> list[ScoreChord]:
     progression: list[ScoreChord] = []
-    prev_degree = None
 
     for i in range(measure_count):
-        if i == 0:
-            degree = 1
-        elif i == measure_count - 1:
-            degree = 5 if section_label in {"verse", "pre-chorus", "bridge"} else 1
-        else:
-            choices = [d for d in pool if d != prev_degree]
-            degree = rng.choice(choices or pool)
+        degree = cluster_cycle[i % len(cluster_cycle)]
 
         progression.append(
             ScoreChord(
@@ -172,31 +168,35 @@ def _build_section_progression(scale, section_label: str, section_id: str, start
                 pitch_classes=triad_pitch_classes(scale, degree),
             )
         )
-        prev_degree = degree
 
     return progression
 
 
 
 
-def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, float]]:
-    section_defs: dict[str, object] = {}
+def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float]]:
+    section_defs = {}
     for idx, section in enumerate(req.sections, start=1):
         section_key = section.id or f"section-{idx}"
         section_defs[section_key] = section
 
     if not req.arrangement:
         return [
-            ((section.id or f"section-{idx}"), section.label, section.pause_beats)
+            (
+                (section.id or f"section-{idx}"),
+                section.label,
+                section.progression_cluster or section.label,
+                section.pause_beats,
+            )
             for idx, section in enumerate(req.sections, start=1)
         ]
 
-    expanded: list[tuple[str, str, float]] = []
+    expanded: list[tuple[str, str, str, float]] = []
     for item in req.arrangement:
         section = section_defs.get(item.section_id)
         if section is None:
             raise ValueError(f"Arrangement references unknown section_id: {item.section_id}")
-        expanded.append((item.section_id, section.label, item.pause_beats))
+        expanded.append((item.section_id, section.label, section.progression_cluster or section.label, item.pause_beats))
 
     return expanded
 
@@ -214,13 +214,13 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     random.seed(f"{key}-{ts}-{tempo}-{req.preferences.style}")
 
     sections: list[ScoreSection] = []
-    section_plans: list[tuple[str, str, list[dict], float]] = []
+    section_plans: list[tuple[str, str, str, list[dict], float]] = []
     beat_cap = beats_per_measure(ts)
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
 
-    for idx, (arranged_section_id, section_label, arranged_pause_beats) in enumerate(arranged_instances, start=1):
+    for idx, (arranged_section_id, section_label, progression_cluster, arranged_pause_beats) in enumerate(arranged_instances, start=1):
         section = section_defs[arranged_section_id]
         section_id = f"sec-{idx}"
         syllables = tokenize_section_lyrics(section_id, section.text)
@@ -234,24 +234,25 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
             )
         )
 
-        archetype = section_archetype(section_label)
         rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section_label)
         rhythm_seed = (
             f"{key}|{ts}|{tempo}|{req.preferences.style}|{section_label}|"
-            f"{archetype}|{section_id}|{req.preferences.lyric_rhythm_preset}"
+            f"{section_archetype(section_label)}|{section_id}|{req.preferences.lyric_rhythm_preset}"
         )
         rhythm_plan = plan_syllable_rhythm(syllables, beat_cap, rhythm_config, rhythm_seed)
         pause_after = arranged_pause_beats if idx < len(arranged_instances) else 0
-        section_plans.append((section_id, archetype, rhythm_plan, pause_after))
+        section_plans.append((section_id, section_label, progression_cluster, rhythm_plan, pause_after))
 
     chord_progression: list[ScoreChord] = []
+    cluster_cycles: dict[str, list[int]] = {}
     beat_cursor = 0.0
-    for section_id, label, rhythm_plan, pause_after in section_plans:
+    for section_id, _label, progression_cluster, rhythm_plan, pause_after in section_plans:
         total_beats = sum(sum(item["durations"]) for item in rhythm_plan) + pause_after
         start_measure = int(beat_cursor // beat_cap) + 1
         end_measure = int(max(beat_cursor + total_beats - 1e-9, beat_cursor) // beat_cap) + 1
         section_measures = max(1, end_measure - start_measure + 1)
-        chord_progression.extend(_build_section_progression(scale, label, section_id, start_measure, section_measures))
+        cluster_cycle = cluster_cycles.setdefault(progression_cluster, _cluster_progression_cycle(scale, progression_cluster))
+        chord_progression.extend(_build_section_progression(scale, section_id, start_measure, section_measures, cluster_cycle))
         beat_cursor += total_beats
 
     chord_by_measure = {ch.measure_number: ch for ch in chord_progression}
@@ -259,7 +260,7 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     soprano_notes: list[ScoreNote] = []
     cursor = 0.0
 
-    for section_id, label, rhythm_plan, pause_after in section_plans:
+    for section_id, label, _progression_cluster, rhythm_plan, pause_after in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
         previous_sung = next((n for n in reversed(soprano_notes) if not n.is_rest), None)
         prev = center if previous_sung is None else pitch_to_midi(previous_sung.pitch)

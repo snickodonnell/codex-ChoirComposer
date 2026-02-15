@@ -184,6 +184,30 @@ def test_arrangement_order_and_instance_pause_drive_generation():
     assert interlude_rests
     assert abs(sum(n.beats for n in interlude_rests) - 1.5) < 1e-9
 
+
+def test_progression_cluster_reuses_single_progression_across_labels_and_repeats():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse A", progression_cluster="Verse", text="Morning"),
+            LyricSection(id="v2", label="Verse B", progression_cluster="Verse", text="Mercy"),
+        ],
+        arrangement=[
+            {"section_id": "v1", "pause_beats": 0},
+            {"section_id": "v2", "pause_beats": 0},
+            {"section_id": "v1", "pause_beats": 0},
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
+    )
+    melody = generate_melody_score(req)
+
+    chords_by_section = {}
+    for chord in melody.chord_progression:
+        chords_by_section.setdefault(chord.section_id, []).append(chord.degree)
+
+    assert chords_by_section["sec-1"]
+    assert chords_by_section["sec-1"] == chords_by_section["sec-2"] == chords_by_section["sec-3"]
+
+
 def test_preferences_validate_theory_fields():
     prefs = CompositionPreferences(key="Bb", primary_mode="major", time_signature="6/8", tempo_bpm=96)
     assert prefs.key == "Bb"

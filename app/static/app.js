@@ -88,6 +88,7 @@ function getSectionLibrary() {
     id: row.dataset.sectionId,
     label: row.querySelector('.section-label').value.trim(),
     text: row.querySelector('.section-text').value,
+    progression_cluster: row.querySelector('.section-progression-cluster').value.trim() || null,
   }));
 }
 
@@ -147,7 +148,7 @@ function refreshArrangementLabels() {
 
 function setSectionMode(row, isSaved) {
   row.dataset.mode = isSaved ? 'saved' : 'edit';
-  const lockable = ['.section-label', '.section-text'];
+  const lockable = ['.section-label', '.section-progression-cluster', '.section-text'];
   for (const selector of lockable) {
     const el = row.querySelector(selector);
     if (el) el.readOnly = isSaved;
@@ -170,6 +171,7 @@ function addSectionRow(defaultLabel = 'verse', text = '') {
       <button type="button" class="toggle-section-mode">Save section</button>
     </div>
     <label>Section Label <input class="section-label" value="${defaultLabel}" placeholder="e.g. Verse, Chorus, Tag" /></label>
+    <label>Progression Cluster <input class="section-progression-cluster" value="${defaultLabel}" placeholder="e.g. Verse cluster, Chorus cluster" /></label>
     <label>Lyrics <textarea class="section-text" placeholder="Enter lyrics here">${text}</textarea></label>
   `;
   setSectionMode(row, false);
