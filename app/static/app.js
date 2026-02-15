@@ -338,10 +338,24 @@ function loadHymnTestData() {
   document.getElementById('lyricPreset').value = 'syllabic';
   document.getElementById('instruction').value = 'Keep a reverent, singable contour.';
 
+  melodyScore = null;
+  satbScore = null;
+  melodyDraftVersions = [];
+  activeDraftVersionId = null;
+  document.getElementById('melodySheet').innerHTML = '';
+  document.getElementById('satbSheet').innerHTML = '';
+  document.getElementById('melodyChords').textContent = formatChordLine(null);
+  document.getElementById('satbChords').textContent = formatChordLine(null);
+  melodyMeta.textContent = '';
+  satbMeta.textContent = '';
+
   clearValidationHighlights();
   showErrors([]);
   refreshArrangementLibrarySelect();
   refreshArrangementLabels();
+  refreshRegenerateClusterOptions();
+  updateDraftVersionOptions();
+  updateActionAvailability();
 }
 
 function setSectionMode(row, isSaved) {
@@ -614,9 +628,9 @@ function splitBeatsIntoDurations(beats) {
   let remaining = Math.max(0, Number(beats) || 0);
   const units = [
     { beats: 4, duration: 'w' },
-    { beats: 3, duration: 'hd' },
+    { beats: 3, duration: 'h.' },
     { beats: 2, duration: 'h' },
-    { beats: 1.5, duration: 'qd' },
+    { beats: 1.5, duration: 'q.' },
     { beats: 1, duration: 'q' },
     { beats: 0.5, duration: '8' },
   ];
@@ -639,20 +653,31 @@ function buildVexNotes(notes, timeSignature) {
   const staveNotes = [];
   let beatCursor = 0;
 
-  notes.forEach((note) => {
-    splitBeatsIntoDurations(note.beats).forEach((duration) => {
-      if (beatCursor >= beatsPerMeasure - 0.001) beatCursor = 0;
-      const key = note.is_rest ? 'b/4' : noteToVexKey(note.pitch);
-      staveNotes.push(`${key}/${duration}${note.is_rest ? 'r' : ''}`);
-      const durationBeats = duration === 'w' ? 4 : duration === 'hd' ? 3 : duration === 'h' ? 2 : duration === 'qd' ? 1.5 : duration === 'q' ? 1 : 0.5;
+  const appendRestPadding = (beatsToPad) => {
+    splitBeatsIntoDurations(beatsToPad).forEach((duration) => {
+      staveNotes.push(`b/4/${duration}r`);
+      const durationBeats = duration === 'w' ? 4 : duration === 'h.' ? 3 : duration === 'h' ? 2 : duration === 'q.' ? 1.5 : duration === 'q' ? 1 : 0.5;
       beatCursor += durationBeats;
+      if (beatCursor >= beatsPerMeasure - 0.001) beatCursor = 0;
+    });
+  };
+
+  notes.forEach((note) => {
+    const key = note.is_rest ? 'b/4' : noteToVexKey(note.pitch);
+    splitBeatsIntoDurations(note.beats).forEach((duration) => {
+      const durationBeats = duration === 'w' ? 4 : duration === 'h.' ? 3 : duration === 'h' ? 2 : duration === 'q.' ? 1.5 : duration === 'q' ? 1 : 0.5;
+      if (beatCursor > 0.001 && beatCursor + durationBeats > beatsPerMeasure + 0.001) {
+        appendRestPadding(beatsPerMeasure - beatCursor);
+      }
+      if (beatCursor >= beatsPerMeasure - 0.001) beatCursor = 0;
+      staveNotes.push(`${key}/${duration}${note.is_rest ? 'r' : ''}`);
+      beatCursor += durationBeats;
+      if (beatCursor >= beatsPerMeasure - 0.001) beatCursor = 0;
     });
   });
 
   if (beatCursor > 0.001 && beatCursor < beatsPerMeasure - 0.001) {
-    splitBeatsIntoDurations(beatsPerMeasure - beatCursor).forEach((duration) => {
-      staveNotes.push(`b/4/${duration}r`);
-    });
+    appendRestPadding(beatsPerMeasure - beatCursor);
   }
 
   return staveNotes;
@@ -829,12 +854,7 @@ document.getElementById('addSection').onclick = () => addSectionRow();
 document.getElementById('addArrangementItem').onclick = () => addArrangementItem(arrangementSectionSelectEl.value);
 if (loadTestDataBtn) loadTestDataBtn.onclick = loadHymnTestData;
 
-addSectionRow('verse', '');
-refreshArrangementLibrarySelect();
-addArrangementItem(getSectionRows()[0]?.dataset.sectionId, 0);
-refreshRegenerateClusterOptions();
-updateDraftVersionOptions();
-updateActionAvailability();
+loadHymnTestData();
 
 generateMelodyBtn.onclick = async () => {
   let res;

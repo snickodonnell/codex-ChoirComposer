@@ -47,9 +47,22 @@ uvicorn app.main:app --reload
 
 Open: `http://127.0.0.1:8000`
 
+### Default UI behavior
+On first load, the UI is pre-seeded with a known-good hymn dataset (sections, arrangement, and musical preferences) so clicking **Generate Melody** works immediately without manual setup.
+
+If you want to clear and reseed from that baseline at any time, click **Load Hymn Test Data**.
+
 ## Tests
 ```bash
 pytest
+```
+
+For full browser-workflow regression coverage in container environments, install Playwright browser dependencies first:
+
+```bash
+python -m playwright install chromium
+python -m playwright install-deps chromium
+pytest -q tests/test_frontend_workflow_regression.py
 ```
 
 
