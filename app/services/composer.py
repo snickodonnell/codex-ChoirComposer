@@ -38,14 +38,6 @@ MAX_GENERATION_ATTEMPTS = 5
 logger = logging.getLogger(__name__)
 
 
-def _append_pause_rests(notes: list[ScoreNote], pause_beats: float, beat_cap: float) -> None:
-    remaining = max(0.0, pause_beats)
-    while remaining > 1e-9:
-        dur = min(remaining, beat_cap)
-        notes.append(ScoreNote(pitch="REST", beats=dur, is_rest=True, section_id="interlude"))
-        remaining -= dur
-
-
 def _pack_measures(voice_notes: dict[str, list[ScoreNote]], time_signature: str) -> list[ScoreMeasure]:
     beat_cap = beats_per_measure(time_signature)
     cursors = {voice: 0 for voice in voice_notes}
@@ -420,7 +412,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     random.seed(base_seed if attempt_number == 0 else f"{base_seed}-attempt-{attempt_number}")
 
     sections: list[ScoreSection] = []
-    section_plans: list[tuple[str, str, str, list[dict], float]] = []
+    section_plans: list[tuple[str, str, str, list[dict]]] = []
     beat_cap = beats_per_measure(ts)
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
@@ -448,14 +440,13 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         if attempt_number > 0:
             rhythm_seed = f"{rhythm_seed}|attempt-{attempt_number}"
         rhythm_plan = plan_syllable_rhythm(syllables, beat_cap, rhythm_config, rhythm_seed)
-        pause_after = arranged_pause_beats if idx < len(arranged_instances) else 0
-        section_plans.append((section_id, section_label, progression_cluster, rhythm_plan, pause_after))
+        section_plans.append((section_id, section_label, progression_cluster, rhythm_plan))
 
     chord_progression: list[ScoreChord] = []
     cluster_cycles: dict[str, list[int]] = {}
     beat_cursor = 0.0
-    for section_id, _label, progression_cluster, rhythm_plan, pause_after in section_plans:
-        total_beats = sum(sum(item["durations"]) for item in rhythm_plan) + pause_after
+    for section_id, _label, progression_cluster, rhythm_plan in section_plans:
+        total_beats = sum(sum(item["durations"]) for item in rhythm_plan)
         start_measure = int(beat_cursor // beat_cap) + 1
         end_measure = int(max(beat_cursor + total_beats - 1e-9, beat_cursor) // beat_cap) + 1
         section_measures = max(1, end_measure - start_measure + 1)
@@ -470,7 +461,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     soprano_notes: list[ScoreNote] = []
     cursor = 0.0
 
-    for section_id, label, _progression_cluster, rhythm_plan, pause_after in section_plans:
+    for section_id, label, _progression_cluster, rhythm_plan in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
         previous_sung = next((n for n in reversed(soprano_notes) if not n.is_rest), None)
         prev = center if previous_sung is None else pitch_to_midi(previous_sung.pitch)
@@ -511,9 +502,6 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                 prev = candidate
                 cursor += duration
 
-        if pause_after > 0:
-            _append_pause_rests(soprano_notes, pause_after, beat_cap)
-            cursor += pause_after
 
     measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, ts)
     score = CanonicalScore(

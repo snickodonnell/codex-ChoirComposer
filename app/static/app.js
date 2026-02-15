@@ -198,7 +198,7 @@ function renderMelody(score, heading = 'Melody') {
   document.getElementById('melodySheet').innerHTML = '';
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
-  drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
+  drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano', { includeRests: true }), melodyScore.meta.time_signature, buildSectionBoundaryMap(melodyScore));
 }
 
 function upsertActiveVersion(score, label) {
@@ -423,8 +423,9 @@ function collectPayload() {
   };
 }
 
-function flattenVoice(score, voice) {
-  return score.measures.flatMap(m => m.voices[voice]).filter(n => !n.is_rest);
+function flattenVoice(score, voice, { includeRests = false } = {}) {
+  const voiceNotes = score.measures.flatMap((m) => m.voices[voice]);
+  return includeRests ? voiceNotes : voiceNotes.filter((n) => !n.is_rest);
 }
 
 
@@ -433,13 +434,82 @@ function formatChordLine(score) {
   return `Chord progression: ${score.chord_progression.map(c => `m${c.measure_number}:${c.symbol}`).join(' | ')}`;
 }
 
+function buildSectionBoundaryMap(score) {
+  return new Map((score?.sections || []).map((section) => [section.id, Number(section.pause_beats) > 0]));
+}
+
 function noteToVexKey(p) {
   const m = p.match(/^([A-G]#?b?)(\d)$/);
   if (!m) return 'c/4';
   return `${m[1].toLowerCase()}/${m[2]}`;
 }
 
-function drawStaff(containerId, title, notes, timeSignature) {
+function parseTimeSignature(timeSignature) {
+  const match = String(timeSignature || '').trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (!match) {
+    return { beatsPerMeasure: 4, display: '4/4' };
+  }
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+    return { beatsPerMeasure: 4, display: '4/4' };
+  }
+  return {
+    beatsPerMeasure: (numerator * 4) / denominator,
+    display: `${numerator}/${denominator}`,
+  };
+}
+
+function splitBeatsIntoDurations(beats) {
+  const chunks = [];
+  let remaining = Math.max(0, Number(beats) || 0);
+  const units = [
+    { beats: 4, duration: 'w' },
+    { beats: 3, duration: 'hd' },
+    { beats: 2, duration: 'h' },
+    { beats: 1.5, duration: 'qd' },
+    { beats: 1, duration: 'q' },
+    { beats: 0.5, duration: '8' },
+  ];
+
+  while (remaining > 0.001) {
+    const matched = units.find((unit) => remaining + 0.001 >= unit.beats);
+    if (!matched) {
+      chunks.push('8');
+      remaining -= 0.5;
+      continue;
+    }
+    chunks.push(matched.duration);
+    remaining -= matched.beats;
+  }
+  return chunks;
+}
+
+function buildVexNotes(notes, timeSignature) {
+  const { beatsPerMeasure } = parseTimeSignature(timeSignature);
+  const staveNotes = [];
+  let beatCursor = 0;
+
+  notes.forEach((note) => {
+    splitBeatsIntoDurations(note.beats).forEach((duration) => {
+      if (beatCursor >= beatsPerMeasure - 0.001) beatCursor = 0;
+      const key = note.is_rest ? 'b/4' : noteToVexKey(note.pitch);
+      staveNotes.push(`${key}/${duration}${note.is_rest ? 'r' : ''}`);
+      const durationBeats = duration === 'w' ? 4 : duration === 'hd' ? 3 : duration === 'h' ? 2 : duration === 'qd' ? 1.5 : duration === 'q' ? 1 : 0.5;
+      beatCursor += durationBeats;
+    });
+  });
+
+  if (beatCursor > 0.001 && beatCursor < beatsPerMeasure - 0.001) {
+    splitBeatsIntoDurations(beatsPerMeasure - beatCursor).forEach((duration) => {
+      staveNotes.push(`b/4/${duration}r`);
+    });
+  }
+
+  return staveNotes;
+}
+
+function drawStaff(containerId, title, notes, timeSignature, boundaryMap = new Map()) {
   const root = document.getElementById(containerId);
   const wrap = document.createElement('div');
   wrap.className = 'staff-wrap';
@@ -462,7 +532,8 @@ function drawStaff(containerId, title, notes, timeSignature) {
   const score = factory.EasyScore();
   const system = factory.System({ x: 10, y: 20, width: 880 });
 
-  const staveNotes = notes.slice(0, 16).map(n => `${noteToVexKey(n.pitch)}/${n.beats >= 2 ? 'h' : 'q'}`);
+  const displayNotes = notes.slice(0, 32);
+  const staveNotes = buildVexNotes(displayNotes, timeSignature);
   if (!staveNotes.length) {
     const emptyState = document.createElement('div');
     emptyState.textContent = 'No notes available for this staff.';
@@ -470,14 +541,26 @@ function drawStaff(containerId, title, notes, timeSignature) {
     wrap.appendChild(emptyState);
     return;
   }
-  system.addStave({ voices: [score.voice(score.notes(staveNotes.join(', ')))] }).addClef('treble').addTimeSignature(timeSignature || '4/4');
+  const { display } = parseTimeSignature(timeSignature);
+  system.addStave({ voices: [score.voice(score.notes(staveNotes.join(', ')))] }).addClef('treble').addTimeSignature(display);
   factory.draw();
 
   const lyricLine = document.createElement('div');
   lyricLine.style.fontFamily = 'monospace';
   lyricLine.style.fontSize = '12px';
   lyricLine.style.marginTop = '6px';
-  lyricLine.textContent = notes.slice(0, 16).map(n => n.lyric ? `${n.lyric}(${n.lyric_mode || 'single'})` : '—').join(' | ');
+  const lyricTokens = [];
+  displayNotes.forEach((note, idx) => {
+    if (idx > 0) {
+      const previousSection = displayNotes[idx - 1]?.section_id;
+      const currentSection = note.section_id;
+      if (previousSection && currentSection && previousSection !== currentSection && boundaryMap.get(previousSection)) {
+        lyricTokens.push('‖');
+      }
+    }
+    lyricTokens.push(note.lyric ? `${note.lyric}(${note.lyric_mode || 'single'})` : '—');
+  });
+  lyricLine.textContent = lyricTokens.join(' | ');
   wrap.appendChild(lyricLine);
 }
 
@@ -682,7 +765,8 @@ generateSATBBtn.onclick = async () => {
   updateActionAvailability();
   document.getElementById('satbSheet').innerHTML = '';
   try {
-    ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v), satbScore.meta.time_signature));
+    const boundaryMap = buildSectionBoundaryMap(satbScore);
+    ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
   } catch (error) {
     showErrors([`SATB generated, but score rendering failed: ${String(error.message || error)}`]);
   }

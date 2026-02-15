@@ -80,7 +80,7 @@ def test_free_form_section_label_is_preserved_and_generates():
     assert melody.chord_progression
 
 
-def test_pause_after_section_inserts_interlude_rest_between_sections():
+def test_pause_after_section_marks_boundary_without_inserting_timed_rests():
     req = CompositionRequest(
         sections=[
             LyricSection(label="Verse", text="Light in the morning fills every heart", pause_beats=2),
@@ -93,8 +93,8 @@ def test_pause_after_section_inserts_interlude_rest_between_sections():
     soprano = [n for m in melody.measures for n in m.voices["soprano"]]
     interlude_rests = [n for n in soprano if n.is_rest and n.section_id == "interlude"]
 
-    assert interlude_rests
-    assert abs(sum(n.beats for n in interlude_rests) - 2.0) < 1e-9
+    assert melody.sections[0].pause_beats == 2
+    assert not interlude_rests
 
 
 def test_strong_beats_prefer_chord_tones():
@@ -175,7 +175,7 @@ def test_musicxml_export_contains_satb_parts_and_harmony():
 
 
 
-def test_arrangement_order_and_instance_pause_drive_generation():
+def test_arrangement_order_and_instance_pause_are_metadata_only():
     req = CompositionRequest(
         sections=[
             LyricSection(id="v", label="Verse", text="Morning glory rises higher"),
@@ -199,8 +199,7 @@ def test_arrangement_order_and_instance_pause_drive_generation():
         for n in m.voices["soprano"]
         if n.is_rest and n.section_id == "interlude"
     ]
-    assert interlude_rests
-    assert abs(sum(n.beats for n in interlude_rests) - 1.5) < 1e-9
+    assert not interlude_rests
 
 
 def test_progression_cluster_reuses_single_progression_across_labels_and_repeats():

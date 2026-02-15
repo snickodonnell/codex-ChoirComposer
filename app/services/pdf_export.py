@@ -31,11 +31,21 @@ def build_score_pdf(score: CanonicalScore) -> bytes:
 
     chords = {c.measure_number: c.symbol for c in score.chord_progression}
 
+    section_pause_map = {section.id: section.pause_beats for section in score.sections}
+    previous_measure_section: str | None = None
+
     for measure in score.measures:
         if y < 1.2 * inch:
             c.showPage()
             y = draw_header("Choir Composition (cont.)")
             c.setFont("Courier", 8)
+        first_section_note = next((n for n in measure.voices['soprano'] if n.section_id != 'padding'), None)
+        current_measure_section = first_section_note.section_id if first_section_note else previous_measure_section
+        if previous_measure_section and current_measure_section and previous_measure_section != current_measure_section and section_pause_map.get(previous_measure_section, 0) > 0:
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(0.75 * inch, y, "‖ Section boundary")
+            y -= 0.14 * inch
+
         c.setFont("Helvetica-Bold", 10)
         chord_symbol = chords.get(measure.number, "—")
         c.drawString(0.75 * inch, y, f"Measure {measure.number}   Chord: {chord_symbol}")
@@ -50,6 +60,8 @@ def build_score_pdf(score: CanonicalScore) -> bytes:
             c.drawString(0.9 * inch, y, f"{voice[0].upper()}: {' | '.join(tokens)}")
             y -= 0.16 * inch
         y -= 0.06 * inch
+        if current_measure_section:
+            previous_measure_section = current_measure_section
 
     c.showPage()
     c.save()
