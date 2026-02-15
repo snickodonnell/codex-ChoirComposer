@@ -120,6 +120,49 @@ def _break_parallel_with_soprano(curr_s: int, prev_s: int, prev_v: int, candidat
     return candidate
 
 
+def _choose_chord_tone(
+    voice: str,
+    previous: int,
+    target: int,
+    chord_tones: set[int],
+    *,
+    lower_bound: int | None = None,
+    upper_bound: int | None = None,
+) -> int:
+    base_lo, base_hi = VOICE_RANGES[voice]
+    lo, hi = base_lo, base_hi
+    if lower_bound is not None:
+        lo = max(lo, lower_bound)
+    if upper_bound is not None:
+        hi = min(hi, upper_bound)
+
+    t_lo, t_hi = VOICE_TESSITURA[voice]
+    if lo > hi:
+        lo = max(base_lo, t_lo - 1)
+        hi = min(base_hi, t_hi + 1)
+        if lo > hi:
+            lo, hi = base_lo, base_hi
+
+    candidates = [m for m in range(lo, hi + 1) if m % 12 in chord_tones]
+    if not candidates:
+        return nearest_in_range(target, lo, hi)
+
+    def pick(pool: list[int]) -> int:
+        return min(pool, key=lambda midi: (abs(midi - target), abs(midi - previous)))
+
+    pools = [
+        [m for m in candidates if abs(m - previous) <= MAX_MELODIC_LEAP and t_lo - 1 <= m <= t_hi + 1],
+        [m for m in candidates if abs(m - previous) <= MAX_MELODIC_LEAP],
+        [m for m in candidates if t_lo - 1 <= m <= t_hi + 1],
+        candidates,
+    ]
+    for pool in pools:
+        if pool:
+            return pick(pool)
+
+    return pick(candidates)
+
+
 def _is_strong_beat(position: float, time_signature: str) -> bool:
     top, bottom = [int(p) for p in time_signature.split("/")]
     quarter_position = position * (bottom / 4)
@@ -493,36 +536,33 @@ def harmonize_score(score: CanonicalScore) -> CanonicalScore:
             continue
 
         sm = pitch_to_midi(s.pitch)
-        bm_target = _nearest_pitch_class(prev_b, {chord.pitch_classes[0]}, *VOICE_RANGES["bass"]) if chord else prev_b
-        tm_target = _nearest_pitch_class(min(sm - 7, prev_t), chord_tones, *VOICE_RANGES["tenor"])
-        am_target = _nearest_pitch_class(min(sm - 3, prev_a), chord_tones, *VOICE_RANGES["alto"])
+        bass_tones = chord_tones
 
-        bm = _constrain_melodic_candidate(bm_target, prev_b, "bass", scale_set)
-        tm = _constrain_melodic_candidate(tm_target, prev_t, "tenor", scale_set)
-        am = _constrain_melodic_candidate(am_target, prev_a, "alto", scale_set)
-
-        if am >= sm:
-            am = _nearest_pitch_class(sm - 2, chord_tones, *VOICE_RANGES["alto"])
-        if tm >= am:
-            tm = _nearest_pitch_class(am - 2, chord_tones, *VOICE_RANGES["tenor"])
-        if bm >= tm:
-            bm = _nearest_pitch_class(tm - 2, {chord.pitch_classes[0]} if chord else chord_tones, *VOICE_RANGES["bass"])
+        am = _choose_chord_tone("alto", prev_a, min(sm - 3, prev_a), chord_tones, upper_bound=sm - 1)
+        tm = _choose_chord_tone("tenor", prev_t, min(sm - 7, prev_t), chord_tones, upper_bound=am - 1)
+        bm = _choose_chord_tone("bass", prev_b, prev_b, bass_tones, lower_bound=VOICE_TESSITURA["bass"][0] - 1, upper_bound=tm - 1)
 
         if sm - am > 12:
-            am = _nearest_pitch_class(sm - 12, chord_tones, *VOICE_RANGES["alto"])
+            am = _choose_chord_tone("alto", prev_a, sm - 12, chord_tones, lower_bound=sm - 12, upper_bound=sm - 1)
         if am - tm > 12:
-            tm = _nearest_pitch_class(am - 12, chord_tones, *VOICE_RANGES["tenor"])
-
-        am = nearest_in_range(am, *VOICE_RANGES["alto"])
-        tm = nearest_in_range(tm, *VOICE_RANGES["tenor"])
-        bm = nearest_in_range(bm, *VOICE_RANGES["bass"])
+            tm = _choose_chord_tone("tenor", prev_t, am - 12, chord_tones, lower_bound=am - 12, upper_bound=am - 1)
+        if tm - bm > 16:
+            bm = _choose_chord_tone("bass", prev_b, tm - 12, bass_tones, lower_bound=max(tm - 16, VOICE_TESSITURA["bass"][0] - 1), upper_bound=tm - 1)
 
         am = _break_parallel_with_soprano(sm, prev_s, prev_a, am, "alto", scale_set)
+        am = _choose_chord_tone("alto", prev_a, am, chord_tones, upper_bound=sm - 1)
         tm = _break_parallel_with_soprano(sm, prev_s, prev_t, tm, "tenor", scale_set)
+        tm = _choose_chord_tone("tenor", prev_t, tm, chord_tones, upper_bound=am - 1)
         bm = _break_parallel_with_soprano(sm, prev_s, prev_b, bm, "bass", scale_set)
-        am = _nearest_pitch_class(am, chord_tones, *VOICE_RANGES["alto"])
-        tm = _nearest_pitch_class(tm, chord_tones, *VOICE_RANGES["tenor"])
-        bm = _nearest_pitch_class(bm, {chord.pitch_classes[0]} if chord else chord_tones, *VOICE_RANGES["bass"])
+        bm = _choose_chord_tone("bass", prev_b, bm, bass_tones, lower_bound=VOICE_TESSITURA["bass"][0] - 1, upper_bound=tm - 1)
+
+        if sm - am > 12:
+            am = _choose_chord_tone("alto", prev_a, sm - 12, chord_tones, lower_bound=sm - 12, upper_bound=sm - 1)
+        if am - tm > 12:
+            tm = _choose_chord_tone("tenor", prev_t, am - 12, chord_tones, lower_bound=am - 12, upper_bound=am - 1)
+        if tm - bm > 16:
+            bm = _choose_chord_tone("bass", prev_b, tm - 12, bass_tones, lower_bound=max(tm - 16, VOICE_TESSITURA["bass"][0] - 1), upper_bound=tm - 1)
+
         tenor_floor = VOICE_TESSITURA["tenor"][0] - 1
         if tm < tenor_floor:
             tm = _nearest_pitch_class(tm + 12, chord_tones, *VOICE_RANGES["tenor"])

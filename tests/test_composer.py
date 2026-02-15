@@ -142,6 +142,23 @@ def test_satb_ranges_order_and_spacing_constraints():
         assert am - tm <= 12
 
 
+def test_satb_generation_handles_dense_triple_meter_without_validation_regressions():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(
+                label="verse",
+                text="sing glory mercy rises river forever glory sing mercy forever mercy joy morning hallelujah light forever glory",
+            )
+        ],
+        preferences=CompositionPreferences(key="G", time_signature="3/4", tempo_bpm=100, lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+    satb = harmonize_score(melody)
+
+    assert satb.meta.stage == "satb"
+    assert validate_score(satb) == []
+
 def test_musicxml_export_contains_satb_parts_and_harmony():
     req = CompositionRequest(
         sections=[LyricSection(label="chorus", text="Sing together forever")],
