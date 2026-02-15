@@ -134,7 +134,6 @@ function getSectionLibrary() {
     id: row.dataset.sectionId,
     label: row.querySelector('.section-label').value.trim(),
     text: row.querySelector('.section-text').value,
-    progression_cluster: row.querySelector('.section-progression-cluster').value.trim() || null,
   }));
 }
 
@@ -144,7 +143,8 @@ function getArrangementClusters() {
   [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item) => {
     const section = sectionById.get(item.dataset.sectionId);
     if (!section) return;
-    const cluster = section.progression_cluster || section.label || 'default';
+    const clusterInput = item.querySelector('.arrangement-progression-cluster');
+    const cluster = clusterInput?.value.trim() || section.label || 'default';
     if (!clusters.includes(cluster)) clusters.push(cluster);
   });
   return clusters;
@@ -164,12 +164,21 @@ function refreshRegenerateClusterOptions() {
 
 function buildSectionClusterMap(payload) {
   const sectionById = new Map(payload.sections.map((section) => [section.id, section]));
-  const arranged = payload.arrangement.length
-    ? payload.arrangement.map((item) => sectionById.get(item.section_id)).filter(Boolean)
-    : payload.sections;
   const mapping = {};
-  arranged.forEach((section, idx) => {
-    mapping[`sec-${idx + 1}`] = section.progression_cluster || section.label || 'default';
+
+  if (payload.arrangement.length) {
+    let arrangedIndex = 0;
+    payload.arrangement.forEach((item) => {
+      const section = sectionById.get(item.section_id);
+      if (!section) return;
+      arrangedIndex += 1;
+      mapping[`sec-${arrangedIndex}`] = item.progression_cluster || section.label || 'default';
+    });
+    return mapping;
+  }
+
+  payload.sections.forEach((section, idx) => {
+    mapping[`sec-${idx + 1}`] = section.label || 'default';
   });
   return mapping;
 }
@@ -250,15 +259,20 @@ function refreshArrangementLibrarySelect() {
   refreshRegenerateClusterOptions();
 }
 
-function addArrangementItem(sectionId, pauseBeats = null) {
+function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = null) {
   if (!sectionId) return;
   const normalizedPause = pauseBeats ?? 0;
+  const section = getSectionLibrary().find((entry) => entry.id === sectionId);
+  const clusterValue = progressionCluster || section?.label || 'default';
   const item = document.createElement('div');
   item.className = 'arrangement-item';
   item.dataset.sectionId = sectionId;
   item.innerHTML = `
     <div class="arrangement-item-main">
       <div class="arrangement-item-meta"></div>
+      <label>Progression Cluster
+        <input class="arrangement-progression-cluster" value="${clusterValue}" placeholder="e.g. Verse, Chorus, Bridge" />
+      </label>
       <label>Pause after section (beats)
         <input class="arrangement-pause-beats" type="number" min="0" max="4" step="0.5" value="${normalizedPause}" />
       </label>
@@ -284,7 +298,7 @@ function refreshArrangementLabels() {
 
 function setSectionMode(row, isSaved) {
   row.dataset.mode = isSaved ? 'saved' : 'edit';
-  const lockable = ['.section-label', '.section-progression-cluster', '.section-text'];
+  const lockable = ['.section-label', '.section-text'];
   for (const selector of lockable) {
     const el = row.querySelector(selector);
     if (el) el.readOnly = isSaved;
@@ -307,7 +321,6 @@ function addSectionRow(defaultLabel = 'verse', text = '') {
       <button type="button" class="toggle-section-mode">Save section</button>
     </div>
     <label>Section Label <input class="section-label" value="${defaultLabel}" placeholder="e.g. Verse, Chorus, Tag" /></label>
-    <label>Progression Cluster <input class="section-progression-cluster" value="${defaultLabel}" placeholder="e.g. Verse cluster, Chorus cluster" /></label>
     <label>Lyrics <textarea class="section-text" placeholder="Enter lyrics here">${text}</textarea></label>
   `;
   setSectionMode(row, false);
@@ -374,6 +387,14 @@ arrangementListEl.addEventListener('click', (event) => {
   refreshArrangementLabels();
 });
 
+arrangementListEl.addEventListener('input', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.classList.contains('arrangement-progression-cluster')) {
+    refreshRegenerateClusterOptions();
+  }
+});
+
 function collectPayload() {
   const errors = validatePreferences();
   const sectionLibrary = getSectionLibrary().filter((s) => s.text.trim().length > 0);
@@ -383,6 +404,7 @@ function collectPayload() {
   const arrangement = [...arrangementListEl.querySelectorAll('.arrangement-item')].map((item) => ({
     section_id: item.dataset.sectionId,
     pause_beats: Number(item.querySelector('.arrangement-pause-beats')?.value) || 0,
+    progression_cluster: item.querySelector('.arrangement-progression-cluster')?.value.trim() || null,
   }));
 
   if (!sectionLibrary.length) {
@@ -687,8 +709,8 @@ function updateWorkflowStatus() {
     return;
   }
 
-  workflowStageLabelEl.textContent = 'Current stage: 2) Melody Draft';
-  workflowStageHintEl.textContent = 'Start by generating a melody from your lyrics and arrangement.';
+  workflowStageLabelEl.textContent = 'Current stage: 1) Lyrics + Structure';
+  workflowStageHintEl.textContent = 'Write lyrics, define section labels, and set arrangement clusters before generating a melody.';
 }
 
 function updateActionAvailability() {
