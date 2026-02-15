@@ -362,6 +362,13 @@ function drawStaff(containerId, title, notes, timeSignature) {
   const system = factory.System({ x: 10, y: 20, width: 880 });
 
   const staveNotes = notes.slice(0, 16).map(n => `${noteToVexKey(n.pitch)}/${n.beats >= 2 ? 'h' : 'q'}`);
+  if (!staveNotes.length) {
+    const emptyState = document.createElement('div');
+    emptyState.textContent = 'No notes available for this staff.';
+    emptyState.className = 'staff-empty-state';
+    wrap.appendChild(emptyState);
+    return;
+  }
   system.addStave({ voices: [score.voice(score.notes(staveNotes.join(', ')))] }).addClef('treble').addTimeSignature(timeSignature || '4/4');
   factory.draw();
 
@@ -544,9 +551,13 @@ generateSATBBtn.onclick = async () => {
   satbScore = payload.score;
   satbMeta.textContent = JSON.stringify({ ...satbScore.meta, harmonization: payload.harmonization_notes }, null, 2);
   document.getElementById('satbChords').textContent = formatChordLine(satbScore);
-  document.getElementById('satbSheet').innerHTML = '';
-  ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v), satbScore.meta.time_signature));
   updateActionAvailability();
+  document.getElementById('satbSheet').innerHTML = '';
+  try {
+    ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v), satbScore.meta.time_signature));
+  } catch (error) {
+    showErrors([`SATB generated, but score rendering failed: ${String(error.message || error)}`]);
+  }
 };
 
 playSATBBtn.onclick = async () => {
