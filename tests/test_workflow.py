@@ -44,3 +44,21 @@ def test_compose_end_score_endpoint_runs_full_workflow():
     assert payload["melody"]["meta"]["stage"] == "melody"
     assert payload["satb"]["meta"]["stage"] == "satb"
     assert "input" in payload["composition_notes"]
+
+
+def test_refine_endpoint_accepts_cluster_regenerate_payload():
+    melody = generate_melody_score(_sample_request())
+
+    res = client.post(
+        "/api/refine-melody",
+        json={
+            "score": melody.model_dump(),
+            "instruction": "fresh melodic idea",
+            "regenerate": True,
+            "selected_clusters": ["verse"],
+            "section_clusters": {"sec-1": "verse"},
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.json()["score"]["meta"]["stage"] == "melody"

@@ -51,7 +51,15 @@ def refine_melody_endpoint(payload: RefineRequest):
     try:
         _require_score_stage(payload.score, "melody", "Melody refinement")
         _require_valid_score(payload.score, "Melody refinement")
-        return MelodyResponse(score=refine_score(payload.score, payload.instruction, payload.regenerate))
+        return MelodyResponse(
+            score=refine_score(
+                payload.score,
+                payload.instruction,
+                payload.regenerate,
+                payload.selected_clusters,
+                payload.section_clusters,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

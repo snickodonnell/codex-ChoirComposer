@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from app.services import composer as composer_service
 from app.models import CanonicalScore, CompositionPreferences, CompositionRequest, LyricSection
-from app.services.composer import generate_melody_score, harmonize_score
+from app.services.composer import generate_melody_score, harmonize_score, refine_score
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
 from app.services.music_theory import VOICE_RANGES, pitch_to_midi
 from app.services.musicxml_export import export_musicxml
@@ -224,6 +224,42 @@ def test_progression_cluster_reuses_single_progression_across_labels_and_repeats
 
     assert chords_by_section["sec-1"]
     assert chords_by_section["sec-1"] == chords_by_section["sec-2"] == chords_by_section["sec-3"]
+
+
+def test_regenerate_updates_only_selected_clusters():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v", label="Verse", progression_cluster="Verse", text="Morning glory rises"),
+            LyricSection(id="c", label="Chorus", progression_cluster="Chorus", text="Sing together forever"),
+        ],
+        arrangement=[
+            {"section_id": "v", "pause_beats": 0},
+            {"section_id": "c", "pause_beats": 0},
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
+    )
+    melody = generate_melody_score(req)
+    before_by_section: dict[str, list[tuple[int, int]]] = {}
+    for chord in melody.chord_progression:
+        before_by_section.setdefault(chord.section_id, []).append((chord.measure_number, chord.degree))
+
+    refined = refine_score(
+        melody,
+        "fresh melodic idea",
+        True,
+        selected_clusters=["Chorus"],
+        section_clusters={"sec-1": "Verse", "sec-2": "Chorus"},
+    )
+
+    after_by_section: dict[str, list[tuple[int, int]]] = {}
+    for chord in refined.chord_progression:
+        after_by_section.setdefault(chord.section_id, []).append((chord.measure_number, chord.degree))
+
+    changed_chorus = before_by_section.get("sec-2") != after_by_section.get("sec-2")
+    unchanged_verse = before_by_section.get("sec-1") == after_by_section.get("sec-1")
+
+    assert changed_chorus
+    assert unchanged_verse
 
 
 def test_preferences_validate_theory_fields():

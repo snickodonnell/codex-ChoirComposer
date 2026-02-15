@@ -8,6 +8,8 @@ const melodyMeta = document.getElementById('melodyMeta');
 const satbMeta = document.getElementById('satbMeta');
 const workflowStageLabelEl = document.getElementById('workflowStageLabel');
 const workflowStageHintEl = document.getElementById('workflowStageHint');
+const regenerateClustersEl = document.getElementById('regenerateClusters');
+const draftVersionSelectEl = document.getElementById('draftVersionSelect');
 
 const generateMelodyBtn = document.getElementById('generateMelody');
 const refineBtn = document.getElementById('refine');
@@ -22,6 +24,9 @@ const formErrorsEl = document.getElementById('formErrors');
 const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
 const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
 let sectionIdCounter = 0;
+const MAX_DRAFT_VERSIONS = 20;
+let melodyDraftVersions = [];
+let activeDraftVersionId = null;
 
 function clearValidationHighlights() {
   document.querySelectorAll('.field-error').forEach((el) => el.classList.remove('field-error'));
@@ -133,6 +138,91 @@ function getSectionLibrary() {
   }));
 }
 
+function getArrangementClusters() {
+  const sectionById = new Map(getSectionLibrary().map((s) => [s.id, s]));
+  const clusters = [];
+  [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item) => {
+    const section = sectionById.get(item.dataset.sectionId);
+    if (!section) return;
+    const cluster = section.progression_cluster || section.label || 'default';
+    if (!clusters.includes(cluster)) clusters.push(cluster);
+  });
+  return clusters;
+}
+
+function refreshRegenerateClusterOptions() {
+  const selected = new Set([...regenerateClustersEl.selectedOptions].map((o) => o.value));
+  const clusters = getArrangementClusters();
+  regenerateClustersEl.innerHTML = clusters.map((cluster) => `<option value="${cluster}">${cluster}</option>`).join('');
+  [...regenerateClustersEl.options].forEach((option) => {
+    option.selected = selected.has(option.value);
+  });
+}
+
+function buildSectionClusterMap(payload) {
+  const sectionById = new Map(payload.sections.map((section) => [section.id, section]));
+  const arranged = payload.arrangement.length
+    ? payload.arrangement.map((item) => sectionById.get(item.section_id)).filter(Boolean)
+    : payload.sections;
+  const mapping = {};
+  arranged.forEach((section, idx) => {
+    mapping[`sec-${idx + 1}`] = section.progression_cluster || section.label || 'default';
+  });
+  return mapping;
+}
+
+function activeDraftVersion() {
+  return melodyDraftVersions.find((version) => version.id === activeDraftVersionId) || null;
+}
+
+function updateDraftVersionOptions() {
+  if (!melodyDraftVersions.length) {
+    draftVersionSelectEl.innerHTML = '<option value="">No versions yet</option>';
+    draftVersionSelectEl.disabled = true;
+    return;
+  }
+  draftVersionSelectEl.disabled = false;
+  draftVersionSelectEl.innerHTML = melodyDraftVersions
+    .map((version, idx) => `<option value="${version.id}">v${idx + 1} · ${version.label}</option>`)
+    .join('');
+  if (activeDraftVersionId) {
+    draftVersionSelectEl.value = activeDraftVersionId;
+  }
+}
+
+function renderMelody(score, heading = 'Melody') {
+  melodyScore = score;
+  document.getElementById('melodySheet').innerHTML = '';
+  melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
+  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
+  drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
+}
+
+function upsertActiveVersion(score, label) {
+  const current = activeDraftVersion();
+  if (!current) return;
+  current.score = score;
+  current.label = label;
+  renderMelody(score, label);
+  updateDraftVersionOptions();
+}
+
+function appendDraftVersion(score, sectionClusterMap, label) {
+  const version = {
+    id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    score,
+    sectionClusterMap,
+    label,
+  };
+  melodyDraftVersions.push(version);
+  if (melodyDraftVersions.length > MAX_DRAFT_VERSIONS) {
+    melodyDraftVersions = melodyDraftVersions.slice(melodyDraftVersions.length - MAX_DRAFT_VERSIONS);
+  }
+  activeDraftVersionId = version.id;
+  renderMelody(score, label);
+  updateDraftVersionOptions();
+}
+
 function describeSection(sectionId) {
   const match = getSectionLibrary().find((s) => s.id === sectionId);
   if (!match) return `Missing section (${sectionId})`;
@@ -154,6 +244,7 @@ function refreshArrangementLibrarySelect() {
   if (sections.some((s) => s.id === current)) {
     arrangementSectionSelectEl.value = current;
   }
+  refreshRegenerateClusterOptions();
 }
 
 function addArrangementItem(sectionId, pauseBeats = null) {
@@ -185,6 +276,7 @@ function refreshArrangementLabels() {
     if (!meta) return;
     meta.textContent = `${idx + 1}. ${describeSection(item.dataset.sectionId)}`;
   });
+  refreshRegenerateClusterOptions();
 }
 
 function setSectionMode(row, isSaved) {
@@ -481,24 +573,27 @@ refreshArrangementLibrarySelect();
 addArrangementItem(getSectionRows()[0]?.dataset.sectionId, 0);
 addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
 addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
+refreshRegenerateClusterOptions();
+updateDraftVersionOptions();
 updateActionAvailability();
 
 generateMelodyBtn.onclick = async () => {
   let res;
+  let payload;
   try {
-    res = await post('/api/generate-melody', collectPayload());
+    payload = collectPayload();
+    res = await post('/api/generate-melody', payload);
   } catch (error) {
     if (error?.isValidationError) return;
     showErrors([String(error.message || error)]);
     return;
   }
-  melodyScore = (await res.json()).score;
+  const score = (await res.json()).score;
+  const sectionClusterMap = buildSectionClusterMap(payload);
+  melodyDraftVersions = [];
+  activeDraftVersionId = null;
+  appendDraftVersion(score, sectionClusterMap, 'Melody');
   resetSatbStage();
-  document.getElementById('melodySheet').innerHTML = '';
-  const notes = flattenVoice(melodyScore, 'soprano');
-  melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
-  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
-  drawStaff('melodySheet', 'Melody', notes, melodyScore.meta.time_signature);
   updateActionAvailability();
 };
 
@@ -509,11 +604,9 @@ refineBtn.onclick = async () => {
   }
   const instruction = document.getElementById('instruction').value || 'smooth out leaps';
   const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: false });
-  melodyScore = (await res.json()).score;
+  const score = (await res.json()).score;
+  upsertActiveVersion(score, 'Melody (refined)');
   resetSatbStage();
-  document.getElementById('melodySheet').innerHTML = '';
-  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
-  drawStaff('melodySheet', 'Melody (refined)', flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
   updateActionAvailability();
 };
 
@@ -523,12 +616,28 @@ regenerateBtn.onclick = async () => {
     return;
   }
   const instruction = document.getElementById('instruction').value || 'fresh melodic idea';
-  const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: true });
-  melodyScore = (await res.json()).score;
+  const selectedClusters = [...regenerateClustersEl.selectedOptions].map((o) => o.value);
+  const currentVersion = activeDraftVersion();
+  const res = await post('/api/refine-melody', {
+    score: melodyScore,
+    instruction,
+    regenerate: true,
+    selected_clusters: selectedClusters,
+    section_clusters: currentVersion?.sectionClusterMap || {},
+  });
+  const score = (await res.json()).score;
+  appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
   resetSatbStage();
-  document.getElementById('melodySheet').innerHTML = '';
-  document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
-  drawStaff('melodySheet', 'Melody (regenerated)', flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
+  updateActionAvailability();
+};
+
+draftVersionSelectEl.onchange = () => {
+  const selectedId = draftVersionSelectEl.value;
+  const version = melodyDraftVersions.find((item) => item.id === selectedId);
+  if (!version) return;
+  activeDraftVersionId = version.id;
+  renderMelody(version.score, version.label);
+  resetSatbStage();
   updateActionAvailability();
 };
 
