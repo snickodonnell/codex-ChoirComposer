@@ -1,29 +1,98 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 VoiceName = Literal["soprano", "alto", "tenor", "bass"]
-SectionLabel = Literal["verse", "chorus", "bridge", "pre-chorus", "intro", "outro", "custom"]
+SectionLabel = str
 LyricMode = Literal["none", "single", "melisma_start", "melisma_continue", "tie_start", "tie_continue", "subdivision"]
 LyricRhythmPreset = Literal["syllabic", "mixed", "melismatic"]
+PrimaryMode = Literal["ionian", "dorian", "phrygian", "lydian", "mixolydian", "aeolian", "locrian"]
+MoodName = Literal["Uplifting", "Prayerful", "Joyful", "Reflective", "Triumphant", "Peaceful", "Lament"]
+
+VALID_TONICS = {"C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb", "G", "G#", "Ab", "A", "A#", "Bb", "B"}
+MODE_FAMILIES = {
+    "ionian": "major",
+    "lydian": "major",
+    "mixolydian": "major",
+    "dorian": "minor",
+    "phrygian": "minor",
+    "aeolian": "minor",
+    "locrian": "minor",
+}
 
 
 class LyricSection(BaseModel):
-    label: SectionLabel
+    label: SectionLabel = Field(min_length=1, max_length=80)
     title: str = Field(min_length=1, max_length=80)
+    pause_beats: float = Field(default=0, ge=0, le=4)
     text: str = Field(min_length=1)
 
 
 class CompositionPreferences(BaseModel):
     key: str | None = None
+    primary_mode: PrimaryMode | None = None
     time_signature: str | None = None
-    tempo_bpm: int | None = Field(default=None, ge=50, le=220)
+    tempo_bpm: int | None = Field(default=None, ge=40, le=240)
     style: str = Field(default="Contemporary Worship", min_length=2, max_length=120)
-    mood: str = Field(default="Uplifting", min_length=2, max_length=120)
+    mood: MoodName = "Uplifting"
     lyric_rhythm_preset: LyricRhythmPreset = "mixed"
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        m = re.fullmatch(r"([A-Ga-g])([#b]?)(m?)", cleaned)
+        if not m:
+            raise ValueError("Invalid key. Use pitch-class keys like C, F#, Bb, Am.")
+        tonic = f"{m.group(1).upper()}{m.group(2)}"
+        if tonic not in VALID_TONICS:
+            raise ValueError("Invalid key tonic. Allowed tonics are A–G with optional #/b.")
+        suffix = "m" if m.group(3) else ""
+        return f"{tonic}{suffix}"
+
+    @field_validator("primary_mode", mode="before")
+    @classmethod
+    def normalize_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip().lower()
+        aliases = {"major": "ionian", "minor": "aeolian", "natural minor": "aeolian"}
+        return aliases.get(cleaned, cleaned)
+
+    @field_validator("time_signature")
+    @classmethod
+    def validate_time_signature(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        m = re.fullmatch(r"(\d{1,2})\s*/\s*(\d{1,2})", cleaned)
+        if not m:
+            raise ValueError("Invalid time signature. Use forms like 4/4, 3/4, 6/8.")
+        top = int(m.group(1))
+        bottom = int(m.group(2))
+        if top < 1 or top > 16:
+            raise ValueError("Time-signature numerator must be between 1 and 16.")
+        if bottom not in {1, 2, 4, 8, 16, 32}:
+            raise ValueError("Time-signature denominator must be a note value (1,2,4,8,16,32).")
+        return f"{top}/{bottom}"
+
+    @model_validator(mode="after")
+    def validate_mode_key_consistency(self):
+        if not self.primary_mode or not self.key:
+            return self
+        if self.key.endswith("m"):
+            raise ValueError("When Primary Mode is set, provide key tonic only (e.g. A + aeolian, not Am).")
+        return self
 
 
 class CompositionRequest(BaseModel):
@@ -45,8 +114,9 @@ class ScoreSyllable(BaseModel):
 
 class ScoreSection(BaseModel):
     id: str
-    label: SectionLabel
+    label: SectionLabel = Field(min_length=1, max_length=80)
     title: str
+    pause_beats: float = Field(default=0, ge=0, le=4)
     lyrics: str
     syllables: list[ScoreSyllable]
 

@@ -19,8 +19,17 @@
 
       <section class="card grid">
         <div>
-          <label>Style <input id="style" value="Contemporary Worship" /></label>
-          <label>Mood <input id="mood" value="Uplifting" /></label>
+          <label>Mood
+            <select id="mood">
+              <option value="Uplifting" selected>Uplifting</option>
+              <option value="Prayerful">Prayerful</option>
+              <option value="Joyful">Joyful</option>
+              <option value="Reflective">Reflective</option>
+              <option value="Triumphant">Triumphant</option>
+              <option value="Peaceful">Peaceful</option>
+              <option value="Lament">Lament</option>
+            </select>
+          </label>
           <label>Lyric Rhythm Preset
             <select id="lyricPreset">
               <option value="syllabic">Syllabic</option>
@@ -31,14 +40,16 @@
         </div>
         <div>
           <label>Key (optional) <input id="key" placeholder="e.g. D or Am" /></label>
+          <label>Primary Mode (optional) <input id="primaryMode" placeholder="e.g. ionian, dorian, aeolian" /></label>
           <label>Time Signature (optional) <input id="time" placeholder="e.g. 4/4" /></label>
-          <label>Tempo BPM (optional) <input id="tempo" type="number" min="50" max="220" /></label>
+          <label>Tempo BPM (optional) <input id="tempo" type="number" min="40" max="240" /></label>
         </div>
       </section>
 
       <section class="card">
         <h2>2) Melody Draft</h2>
         <button id="generateMelody">Generate Melody</button>
+        <div id="formErrors" class="form-errors" role="alert"></div>
         <div class="actions">
           <input id="instruction" placeholder="e.g. make chorus higher and calmer" />
           <button id="refine">Refine</button>

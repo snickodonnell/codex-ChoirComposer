@@ -109,11 +109,16 @@ def choose_defaults(style: str, mood: str) -> tuple[str, str, int]:
     return key, time_sig, tempo
 
 
-def parse_key(key: str) -> Scale:
+def parse_key(key: str, primary_mode: str | None = None) -> Scale:
     cleaned = key.strip()
-    is_minor = cleaned.lower().endswith("m")
-    tonic = cleaned[:-1] if is_minor else cleaned
+    key_marks_minor = cleaned.lower().endswith("m")
+    tonic = cleaned[:-1] if key_marks_minor else cleaned
     tonic = tonic.strip().capitalize()
+
+    mode_minor = {"dorian", "phrygian", "aeolian", "locrian"}
+    mode = (primary_mode or "").strip().lower()
+    is_minor = key_marks_minor or mode in mode_minor
+
     if tonic not in NOTE_TO_SEMITONE:
         tonic = "C"
     return Scale(tonic=tonic, is_minor=is_minor)

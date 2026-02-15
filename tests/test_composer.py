@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import generate_melody_score, harmonize_score
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
@@ -54,7 +57,7 @@ def test_preset_controls_melisma_amount():
 def test_generate_melody_and_satb_validate():
     req = CompositionRequest(
         sections=[LyricSection(label="verse", title="Verse 1", text="Glory rises in the dawn.")],
-        preferences=CompositionPreferences(style="Hymn", mood="Warm", lyric_rhythm_preset="mixed"),
+        preferences=CompositionPreferences(style="Hymn", mood="Uplifting", lyric_rhythm_preset="mixed", key="D", time_signature="4/4", tempo_bpm=92),
     )
     melody = generate_melody_score(req)
     assert melody.meta.stage == "melody"
@@ -64,6 +67,33 @@ def test_generate_melody_and_satb_validate():
     satb = harmonize_score(melody)
     assert satb.meta.stage == "satb"
     assert validate_score(satb) == []
+
+
+def test_free_form_section_label_is_preserved_and_generates():
+    req = CompositionRequest(
+        sections=[LyricSection(label="Verse Lift", title="Verse Lift", text="Glory rises in the dawn.")],
+        preferences=CompositionPreferences(style="Hymn", mood="Uplifting", lyric_rhythm_preset="mixed", key="D", time_signature="4/4", tempo_bpm=92),
+    )
+    melody = generate_melody_score(req)
+    assert melody.sections[0].label == "Verse Lift"
+    assert melody.chord_progression
+
+
+def test_pause_after_section_inserts_interlude_rest_between_sections():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(label="Verse", title="Verse", text="Light in the morning fills every heart", pause_beats=2),
+            LyricSection(label="Chorus", title="Chorus", text="Sing together, hope forever"),
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
+    )
+    melody = generate_melody_score(req)
+
+    soprano = [n for m in melody.measures for n in m.voices["soprano"]]
+    interlude_rests = [n for n in soprano if n.is_rest and n.section_id == "interlude"]
+
+    assert interlude_rests
+    assert abs(sum(n.beats for n in interlude_rests) - 2.0) < 1e-9
 
 
 def test_strong_beats_prefer_chord_tones():
@@ -124,3 +154,27 @@ def test_musicxml_export_contains_satb_parts_and_harmony():
     assert "<part-name>Tenor</part-name>" in xml
     assert "<part-name>Bass</part-name>" in xml
     assert "<harmony>" in xml
+
+
+def test_preferences_validate_theory_fields():
+    prefs = CompositionPreferences(key="Bb", primary_mode="major", time_signature="6/8", tempo_bpm=96)
+    assert prefs.key == "Bb"
+    assert prefs.primary_mode == "ionian"
+    assert prefs.time_signature == "6/8"
+
+
+def test_preferences_reject_invalid_theory_values():
+    with pytest.raises(ValidationError):
+        CompositionPreferences(key="H")
+
+    with pytest.raises(ValidationError):
+        CompositionPreferences(primary_mode="super-locrian")
+
+    with pytest.raises(ValidationError):
+        CompositionPreferences(time_signature="5/3")
+
+    with pytest.raises(ValidationError):
+        CompositionPreferences(tempo_bpm=300)
+
+    with pytest.raises(ValidationError):
+        CompositionPreferences(key="Am", primary_mode="aeolian")

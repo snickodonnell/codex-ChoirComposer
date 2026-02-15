@@ -13,6 +13,7 @@ from app.models import (
     ScoreSection,
 )
 from app.services.lyric_mapping import (
+    section_archetype,
     config_for_preset,
     plan_syllable_rhythm,
     tokenize_section_lyrics,
@@ -31,6 +32,14 @@ from app.services.music_theory import (
 from app.services.score_validation import beats_per_measure, validate_score
 
 MAX_MELODIC_LEAP = 7
+
+
+def _append_pause_rests(notes: list[ScoreNote], pause_beats: float, beat_cap: float) -> None:
+    remaining = max(0.0, pause_beats)
+    while remaining > 1e-9:
+        dur = min(remaining, beat_cap)
+        notes.append(ScoreNote(pitch="REST", beats=dur, is_rest=True, section_id="interlude"))
+        remaining -= dur
 
 
 def _pack_measures(voice_notes: dict[str, list[ScoreNote]], time_signature: str) -> list[ScoreMeasure]:
@@ -177,40 +186,57 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     if req.preferences.tempo_bpm:
         tempo = req.preferences.tempo_bpm
 
-    scale = parse_key(key)
+    scale = parse_key(key, req.preferences.primary_mode)
     scale_set = set(scale.semitones)
     random.seed(f"{key}-{ts}-{tempo}-{req.preferences.style}")
 
     sections: list[ScoreSection] = []
-    section_plans: list[tuple[str, str, list[dict]]] = []
+    section_plans: list[tuple[str, str, list[dict], float]] = []
     beat_cap = beats_per_measure(ts)
 
     for idx, section in enumerate(req.sections, start=1):
         section_id = f"sec-{idx}"
         syllables = tokenize_section_lyrics(section_id, section.text)
-        sections.append(ScoreSection(id=section_id, label=section.label, title=section.title, lyrics=section.text, syllables=syllables))
+        sections.append(
+            ScoreSection(
+                id=section_id,
+                label=section.label,
+                title=section.title,
+                pause_beats=section.pause_beats,
+                lyrics=section.text,
+                syllables=syllables,
+            )
+        )
 
+        archetype = section_archetype(section.label)
         rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section.label)
-        rhythm_seed = f"{key}|{ts}|{tempo}|{req.preferences.style}|{section.label}|{section_id}|{req.preferences.lyric_rhythm_preset}"
+        rhythm_seed = (
+            f"{key}|{ts}|{tempo}|{req.preferences.style}|{section.label}|"
+            f"{archetype}|{section_id}|{req.preferences.lyric_rhythm_preset}"
+        )
         rhythm_plan = plan_syllable_rhythm(syllables, beat_cap, rhythm_config, rhythm_seed)
-        section_plans.append((section_id, section.label, rhythm_plan))
+        pause_after = section.pause_beats if idx < len(req.sections) else 0
+        section_plans.append((section_id, archetype, rhythm_plan, pause_after))
 
     chord_progression: list[ScoreChord] = []
-    next_measure = 1
-    for section_id, label, rhythm_plan in section_plans:
-        total_beats = sum(sum(item["durations"]) for item in rhythm_plan)
-        section_measures = max(1, math.ceil(total_beats / beat_cap))
-        chord_progression.extend(_build_section_progression(scale, label, section_id, next_measure, section_measures))
-        next_measure += section_measures
+    beat_cursor = 0.0
+    for section_id, label, rhythm_plan, pause_after in section_plans:
+        total_beats = sum(sum(item["durations"]) for item in rhythm_plan) + pause_after
+        start_measure = int(beat_cursor // beat_cap) + 1
+        end_measure = int(max(beat_cursor + total_beats - 1e-9, beat_cursor) // beat_cap) + 1
+        section_measures = max(1, end_measure - start_measure + 1)
+        chord_progression.extend(_build_section_progression(scale, label, section_id, start_measure, section_measures))
+        beat_cursor += total_beats
 
     chord_by_measure = {ch.measure_number: ch for ch in chord_progression}
 
     soprano_notes: list[ScoreNote] = []
     cursor = 0.0
 
-    for section_id, label, rhythm_plan in section_plans:
+    for section_id, label, rhythm_plan, pause_after in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
-        prev = center if not soprano_notes else pitch_to_midi(soprano_notes[-1].pitch)
+        previous_sung = next((n for n in reversed(soprano_notes) if not n.is_rest), None)
+        prev = center if previous_sung is None else pitch_to_midi(previous_sung.pitch)
 
         for item in rhythm_plan:
             step_base = random.choice([-2, -1, 0, 1, 2, 3])
@@ -247,6 +273,10 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
                 )
                 prev = candidate
                 cursor += duration
+
+        if pause_after > 0:
+            _append_pause_rests(soprano_notes, pause_after, beat_cap)
+            cursor += pause_after
 
     measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, ts)
     score = CanonicalScore(

@@ -5,32 +5,146 @@ const sectionsEl = document.getElementById('sections');
 const melodyMeta = document.getElementById('melodyMeta');
 const satbMeta = document.getElementById('satbMeta');
 
+const formErrorsEl = document.getElementById('formErrors');
+const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
+const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
+
+function normalizeMode(mode) {
+  const cleaned = (mode || '').trim().toLowerCase();
+  if (cleaned === 'major') return 'ionian';
+  if (cleaned === 'minor' || cleaned === 'natural minor') return 'aeolian';
+  return cleaned;
+}
+
+function validatePreferences() {
+  const errors = [];
+  const keyRaw = document.getElementById('key').value?.trim() || '';
+  const modeRaw = document.getElementById('primaryMode').value?.trim() || '';
+  const timeRaw = document.getElementById('time').value?.trim() || '';
+  const tempoRaw = document.getElementById('tempo').value?.trim() || '';
+
+  if (keyRaw) {
+    const m = keyRaw.match(/^([A-Ga-g])([#b]?)(m?)$/);
+    if (!m) {
+      errors.push('Key must look like C, F#, Bb, or Am.');
+    } else {
+      const tonic = `${m[1].toUpperCase()}${m[2]}`;
+      if (!VALID_TONICS.has(tonic)) {
+        errors.push('Key tonic must be A–G with optional # or b accidental.');
+      }
+      if (m[3] && modeRaw) {
+        errors.push('Use either minor suffix in key (e.g., Am) OR Primary Mode (e.g., A + aeolian), not both.');
+      }
+    }
+  }
+
+  if (modeRaw) {
+    if (!VALID_MODES.has(modeRaw.toLowerCase())) {
+      errors.push('Primary Mode must be one of: ionian, dorian, phrygian, lydian, mixolydian, aeolian, locrian (or major/minor).');
+    }
+  }
+
+  if (timeRaw) {
+    const m = timeRaw.match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/);
+    if (!m) {
+      errors.push('Time signature must be formatted like 4/4, 3/4, or 6/8.');
+    } else {
+      const top = Number(m[1]);
+      const bottom = Number(m[2]);
+      if (top < 1 || top > 16) errors.push('Time-signature numerator must be between 1 and 16.');
+      if (![1, 2, 4, 8, 16, 32].includes(bottom)) errors.push('Time-signature denominator must be 1, 2, 4, 8, 16, or 32.');
+    }
+  }
+
+  if (tempoRaw) {
+    const tempo = Number(tempoRaw);
+    if (!Number.isFinite(tempo) || tempo < 40 || tempo > 240) {
+      errors.push('Tempo must be between 40 and 240 BPM.');
+    }
+  }
+
+  return errors;
+}
+
+function showErrors(errors) {
+  if (!errors.length) {
+    formErrorsEl.textContent = '';
+    formErrorsEl.style.display = 'none';
+    return;
+  }
+  formErrorsEl.innerHTML = errors.map(e => `• ${e}`).join('<br/>');
+  formErrorsEl.style.display = 'block';
+}
+
+function setSectionMode(row, isSaved) {
+  row.dataset.mode = isSaved ? 'saved' : 'edit';
+  const lockable = ['.section-label', '.section-title', '.section-text'];
+  for (const selector of lockable) {
+    const el = row.querySelector(selector);
+    if (el) el.readOnly = isSaved;
+  }
+
+  const toggleBtn = row.querySelector('.toggle-section-mode');
+  if (toggleBtn) {
+    toggleBtn.textContent = isSaved ? 'Edit section' : 'Save section';
+  }
+}
+
 function addSectionRow(defaultLabel = 'verse', title = '', text = '') {
   const row = document.createElement('div');
   row.className = 'section-row';
   row.innerHTML = `
-    <label>Type
-      <select class="section-label">
-        <option value="verse">Verse</option>
-        <option value="chorus">Chorus/Refrain</option>
-        <option value="bridge">Bridge</option>
-        <option value="pre-chorus">Pre-Chorus</option>
-        <option value="intro">Intro</option>
-        <option value="outro">Outro</option>
-        <option value="custom">Custom</option>
-      </select>
-    </label>
+    <div class="section-row-controls">
+      <button type="button" class="move-section-up">↑</button>
+      <button type="button" class="move-section-down">↓</button>
+      <button type="button" class="toggle-section-mode">Save section</button>
+    </div>
+    <label>Section Label <input class="section-label" value="${defaultLabel}" placeholder="e.g. Verse, Chorus, Tag" /></label>
     <label>Title <input class="section-title" value="${title}" placeholder="Verse 1" /></label>
+    <label>Pause after section (beats) <input class="section-pause-beats" type="number" min="0" max="4" step="0.5" value="0" /></label>
     <label>Lyrics <textarea class="section-text" placeholder="Enter lyrics here">${text}</textarea></label>
   `;
-  row.querySelector('.section-label').value = defaultLabel;
+  setSectionMode(row, false);
   sectionsEl.appendChild(row);
 }
 
+sectionsEl.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const row = target.closest('.section-row');
+  if (!row) return;
+
+  if (target.classList.contains('move-section-up')) {
+    const prev = row.previousElementSibling;
+    if (prev) {
+      sectionsEl.insertBefore(row, prev);
+    }
+  }
+
+  if (target.classList.contains('move-section-down')) {
+    const next = row.nextElementSibling;
+    if (next) {
+      sectionsEl.insertBefore(next, row);
+    }
+  }
+
+  if (target.classList.contains('toggle-section-mode')) {
+    setSectionMode(row, row.dataset.mode !== 'saved');
+  }
+});
+
 function collectPayload() {
+  const errors = validatePreferences();
+  if (errors.length) {
+    showErrors(errors);
+    throw new Error('Please fix the highlighted input validation errors.');
+  }
+  showErrors([]);
+
   const sections = [...document.querySelectorAll('.section-row')].map((row, i) => ({
     label: row.querySelector('.section-label').value,
     title: row.querySelector('.section-title').value || `Section ${i + 1}`,
+    pause_beats: Number(row.querySelector('.section-pause-beats').value) || 0,
     text: row.querySelector('.section-text').value
   })).filter(s => s.text.trim().length > 0);
 
@@ -38,9 +152,9 @@ function collectPayload() {
     sections,
     preferences: {
       key: document.getElementById('key').value || null,
+      primary_mode: normalizeMode(document.getElementById('primaryMode').value) || null,
       time_signature: document.getElementById('time').value || null,
       tempo_bpm: document.getElementById('tempo').value ? Number(document.getElementById('tempo').value) : null,
-      style: document.getElementById('style').value,
       mood: document.getElementById('mood').value,
       lyric_rhythm_preset: document.getElementById('lyricPreset').value
     }
@@ -94,7 +208,21 @@ function drawStaff(containerId, title, notes, timeSignature) {
 
 async function post(url, payload) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed.detail)) {
+        message = parsed.detail.map(d => `${d.loc?.join('.') || 'request'}: ${d.msg}`).join(' | ');
+      } else if (parsed.detail) {
+        message = parsed.detail;
+      }
+    } catch (_) {
+      // keep raw text
+    }
+    throw new Error(message);
+  }
   return res;
 }
 
@@ -124,7 +252,13 @@ addSectionRow('verse', 'Verse 1', 'Light in the morning fills every heart');
 addSectionRow('chorus', 'Chorus', 'Sing together, hope forever');
 
 document.getElementById('generateMelody').onclick = async () => {
-  const res = await post('/api/generate-melody', collectPayload());
+  let res;
+  try {
+    res = await post('/api/generate-melody', collectPayload());
+  } catch (error) {
+    showErrors([String(error.message || error)]);
+    return;
+  }
   melodyScore = (await res.json()).score;
   document.getElementById('melodySheet').innerHTML = '';
   const notes = flattenVoice(melodyScore, 'soprano');
