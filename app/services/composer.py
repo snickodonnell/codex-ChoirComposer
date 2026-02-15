@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import random
 
@@ -32,6 +33,9 @@ from app.services.music_theory import (
 from app.services.score_validation import beats_per_measure, validate_score
 
 MAX_MELODIC_LEAP = 7
+MAX_GENERATION_ATTEMPTS = 5
+
+logger = logging.getLogger(__name__)
 
 
 def _append_pause_rests(notes: list[ScoreNote], pause_beats: float, beat_cap: float) -> None:
@@ -200,7 +204,75 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
 
     return expanded
 
-def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
+def _repair_missing_chords(score: CanonicalScore, primary_mode: str | None) -> None:
+    if not score.measures:
+        return
+    scale = parse_key(score.meta.key, primary_mode)
+    chord_by_measure = {ch.measure_number: ch for ch in score.chord_progression}
+    first_section_by_measure: dict[int, str] = {}
+    for measure in score.measures:
+        first_note = next((n for n in measure.voices["soprano"] if not n.is_rest), None)
+        first_section_by_measure[measure.number] = first_note.section_id if first_note else "padding"
+
+    for measure in score.measures:
+        if measure.number in chord_by_measure:
+            continue
+        section_id = first_section_by_measure.get(measure.number, "padding")
+        score.chord_progression.append(
+            ScoreChord(
+                measure_number=measure.number,
+                section_id=section_id,
+                degree=1,
+                symbol=chord_symbol(scale, 1),
+                pitch_classes=triad_pitch_classes(scale, 1),
+            )
+        )
+
+
+def _repair_key_mode_mismatch(score: CanonicalScore, primary_mode: str | None) -> None:
+    scale = parse_key(score.meta.key, primary_mode)
+    for chord in score.chord_progression:
+        degree = chord.degree if 1 <= chord.degree <= 7 else 1
+        chord.degree = degree
+        chord.pitch_classes = triad_pitch_classes(scale, degree)
+        chord.symbol = chord_symbol(scale, degree)
+
+
+def _repair_soprano_strong_beats(score: CanonicalScore, primary_mode: str | None) -> None:
+    scale_set = set(parse_key(score.meta.key, primary_mode).semitones)
+    chord_by_measure = {ch.measure_number: ch for ch in score.chord_progression}
+    bpb = beats_per_measure(score.meta.time_signature)
+    prev = None
+    cursor = 0.0
+
+    for note in _flatten_voice(score, "soprano"):
+        if note.is_rest:
+            cursor += note.beats
+            continue
+        midi = pitch_to_midi(note.pitch)
+        basis = midi if prev is None else prev
+        if note.lyric_mode == "tie_continue":
+            midi = basis
+        elif note.lyric_mode != "melisma_continue" and _is_strong_beat(cursor % bpb, score.meta.time_signature):
+            chord = chord_by_measure.get(int(cursor // bpb) + 1)
+            if chord and midi % 12 not in set(chord.pitch_classes):
+                midi = _nearest_pitch_class_with_leap(midi, basis, set(chord.pitch_classes), "soprano")
+                midi = _constrain_melodic_candidate(midi, basis, "soprano", scale_set)
+                midi = _nearest_pitch_class_with_leap(midi, basis, set(chord.pitch_classes), "soprano")
+        note.pitch = midi_to_pitch(midi)
+        prev = midi
+        cursor += note.beats
+
+
+def _auto_repair_melody_score(score: CanonicalScore, primary_mode: str | None) -> CanonicalScore:
+    _repair_missing_chords(score, primary_mode)
+    _repair_key_mode_mismatch(score, primary_mode)
+    _repair_soprano_strong_beats(score, primary_mode)
+    score.chord_progression.sort(key=lambda chord: chord.measure_number)
+    return score
+
+
+def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
         key = req.preferences.key
@@ -211,7 +283,8 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
 
     scale = parse_key(key, req.preferences.primary_mode)
     scale_set = set(scale.semitones)
-    random.seed(f"{key}-{ts}-{tempo}-{req.preferences.style}")
+    base_seed = f"{key}-{ts}-{tempo}-{req.preferences.style}"
+    random.seed(base_seed if attempt_number == 0 else f"{base_seed}-attempt-{attempt_number}")
 
     sections: list[ScoreSection] = []
     section_plans: list[tuple[str, str, str, list[dict], float]] = []
@@ -239,6 +312,8 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
             f"{key}|{ts}|{tempo}|{req.preferences.style}|{section_label}|"
             f"{section_archetype(section_label)}|{section_id}|{req.preferences.lyric_rhythm_preset}"
         )
+        if attempt_number > 0:
+            rhythm_seed = f"{rhythm_seed}|attempt-{attempt_number}"
         rhythm_plan = plan_syllable_rhythm(syllables, beat_cap, rhythm_config, rhythm_seed)
         pause_after = arranged_pause_beats if idx < len(arranged_instances) else 0
         section_plans.append((section_id, section_label, progression_cluster, rhythm_plan, pause_after))
@@ -319,10 +394,34 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
         measures=measures,
         chord_progression=chord_progression,
     )
-    errs = validate_score(score)
-    if errs:
-        raise ValueError(f"Generated melody score failed validation: {'; '.join(errs)}")
     return score
+
+
+def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
+    primary_mode = req.preferences.primary_mode
+    error_history: list[str] = []
+
+    for attempt_idx in range(MAX_GENERATION_ATTEMPTS):
+        attempt = attempt_idx + 1
+        score = _compose_melody_once(req, attempt_idx)
+        errs = validate_score(score, primary_mode)
+        if not errs:
+            return score
+
+        logger.warning("Melody validation failed on attempt %s before repair: %s", attempt, errs)
+        repaired = _auto_repair_melody_score(score, primary_mode)
+        repaired_errs = validate_score(repaired, primary_mode)
+        if not repaired_errs:
+            logger.info("Melody auto-repair succeeded on attempt %s.", attempt)
+            return repaired
+
+        logger.warning("Melody validation failed on attempt %s after repair: %s", attempt, repaired_errs)
+        error_history.append(f"attempt {attempt}: {'; '.join(repaired_errs)}")
+
+    logger.error("Melody generation exhausted retries. Validation errors: %s", error_history)
+    raise ValueError(
+        "Couldn’t generate a valid melody with the current constraints—try relaxing key/mode/time/tempo or click Regenerate"
+    )
 
 
 def refine_score(score: CanonicalScore, instruction: str, regenerate: bool) -> CanonicalScore:

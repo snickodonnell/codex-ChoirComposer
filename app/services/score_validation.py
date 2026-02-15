@@ -13,7 +13,7 @@ def beats_per_measure(time_signature: str) -> float:
     return int(top) * (4 / int(bottom))
 
 
-def validate_score(score: CanonicalScore) -> list[str]:
+def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> list[str]:
     errors: list[str] = []
     target = beats_per_measure(score.meta.time_signature)
 
@@ -23,7 +23,7 @@ def validate_score(score: CanonicalScore) -> list[str]:
             if abs(total - target) > 1e-6:
                 errors.append(f"Measure {measure.number} voice {voice} has {total:g} beats; expected {target:g}.")
 
-    errors.extend(_validate_chord_progression(score))
+    errors.extend(_validate_chord_progression(score, primary_mode))
     errors.extend(_validate_lyric_mapping(score))
     errors.extend(_validate_ranges_and_motion(score))
     errors.extend(_validate_harmonic_integrity(score))
@@ -51,7 +51,7 @@ def _is_strong_beat(position: float, time_signature: str) -> bool:
     return abs(quarter_position % 1) < 1e-9
 
 
-def _validate_chord_progression(score: CanonicalScore) -> list[str]:
+def _validate_chord_progression(score: CanonicalScore, primary_mode: str | None = None) -> list[str]:
     errors: list[str] = []
     if not score.chord_progression:
         return ["Score must include an explicit chord progression."]
@@ -62,7 +62,7 @@ def _validate_chord_progression(score: CanonicalScore) -> list[str]:
     if missing:
         errors.append(f"Missing chord symbols for measures: {missing}.")
 
-    scale = parse_key(score.meta.key)
+    scale = parse_key(score.meta.key, primary_mode)
     valid_triads = {tuple(triad_pitch_classes(scale, degree)) for degree in range(1, 8)}
     for chord in score.chord_progression:
         if tuple(chord.pitch_classes) not in valid_triads:
