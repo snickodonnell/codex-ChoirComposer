@@ -177,6 +177,29 @@ def _build_section_progression(scale, section_label: str, section_id: str, start
     return progression
 
 
+
+
+def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, float]]:
+    section_defs: dict[str, object] = {}
+    for idx, section in enumerate(req.sections, start=1):
+        section_key = section.id or f"section-{idx}"
+        section_defs[section_key] = section
+
+    if not req.arrangement:
+        return [
+            ((section.id or f"section-{idx}"), section.label, section.pause_beats)
+            for idx, section in enumerate(req.sections, start=1)
+        ]
+
+    expanded: list[tuple[str, str, float]] = []
+    for item in req.arrangement:
+        section = section_defs.get(item.section_id)
+        if section is None:
+            raise ValueError(f"Arrangement references unknown section_id: {item.section_id}")
+        expanded.append((item.section_id, section.label, item.pause_beats))
+
+    return expanded
+
 def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
@@ -194,28 +217,31 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     section_plans: list[tuple[str, str, list[dict], float]] = []
     beat_cap = beats_per_measure(ts)
 
-    for idx, section in enumerate(req.sections, start=1):
+    section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
+    arranged_instances = _expand_arrangement(req)
+
+    for idx, (arranged_section_id, section_label, arranged_pause_beats) in enumerate(arranged_instances, start=1):
+        section = section_defs[arranged_section_id]
         section_id = f"sec-{idx}"
         syllables = tokenize_section_lyrics(section_id, section.text)
         sections.append(
             ScoreSection(
                 id=section_id,
-                label=section.label,
-                title=section.title,
-                pause_beats=section.pause_beats,
+                label=section_label,
+                pause_beats=arranged_pause_beats,
                 lyrics=section.text,
                 syllables=syllables,
             )
         )
 
-        archetype = section_archetype(section.label)
-        rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section.label)
+        archetype = section_archetype(section_label)
+        rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section_label)
         rhythm_seed = (
-            f"{key}|{ts}|{tempo}|{req.preferences.style}|{section.label}|"
+            f"{key}|{ts}|{tempo}|{req.preferences.style}|{section_label}|"
             f"{archetype}|{section_id}|{req.preferences.lyric_rhythm_preset}"
         )
         rhythm_plan = plan_syllable_rhythm(syllables, beat_cap, rhythm_config, rhythm_seed)
-        pause_after = section.pause_beats if idx < len(req.sections) else 0
+        pause_after = arranged_pause_beats if idx < len(arranged_instances) else 0
         section_plans.append((section_id, archetype, rhythm_plan, pause_after))
 
     chord_progression: list[ScoreChord] = []

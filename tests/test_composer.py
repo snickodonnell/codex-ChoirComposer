@@ -56,7 +56,7 @@ def test_preset_controls_melisma_amount():
 
 def test_generate_melody_and_satb_validate():
     req = CompositionRequest(
-        sections=[LyricSection(label="verse", title="Verse 1", text="Glory rises in the dawn.")],
+        sections=[LyricSection(label="verse", text="Glory rises in the dawn.")],
         preferences=CompositionPreferences(style="Hymn", mood="Uplifting", lyric_rhythm_preset="mixed", key="D", time_signature="4/4", tempo_bpm=92),
     )
     melody = generate_melody_score(req)
@@ -71,7 +71,7 @@ def test_generate_melody_and_satb_validate():
 
 def test_free_form_section_label_is_preserved_and_generates():
     req = CompositionRequest(
-        sections=[LyricSection(label="Verse Lift", title="Verse Lift", text="Glory rises in the dawn.")],
+        sections=[LyricSection(label="Verse Lift", text="Glory rises in the dawn.")],
         preferences=CompositionPreferences(style="Hymn", mood="Uplifting", lyric_rhythm_preset="mixed", key="D", time_signature="4/4", tempo_bpm=92),
     )
     melody = generate_melody_score(req)
@@ -82,8 +82,8 @@ def test_free_form_section_label_is_preserved_and_generates():
 def test_pause_after_section_inserts_interlude_rest_between_sections():
     req = CompositionRequest(
         sections=[
-            LyricSection(label="Verse", title="Verse", text="Light in the morning fills every heart", pause_beats=2),
-            LyricSection(label="Chorus", title="Chorus", text="Sing together, hope forever"),
+            LyricSection(label="Verse", text="Light in the morning fills every heart", pause_beats=2),
+            LyricSection(label="Chorus", text="Sing together, hope forever"),
         ],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
     )
@@ -98,7 +98,7 @@ def test_pause_after_section_inserts_interlude_rest_between_sections():
 
 def test_strong_beats_prefer_chord_tones():
     req = CompositionRequest(
-        sections=[LyricSection(label="verse", title="Verse", text="Morning glory rises higher")],
+        sections=[LyricSection(label="verse", text="Morning glory rises higher")],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90),
     )
     melody = generate_melody_score(req)
@@ -118,7 +118,7 @@ def test_strong_beats_prefer_chord_tones():
 
 def test_satb_ranges_order_and_spacing_constraints():
     req = CompositionRequest(
-        sections=[LyricSection(label="verse", title="Verse", text="Morning mercy lights the sky and gives us song")],
+        sections=[LyricSection(label="verse", text="Morning mercy lights the sky and gives us song")],
         preferences=CompositionPreferences(key="D", time_signature="4/4", tempo_bpm=92),
     )
     satb = harmonize_score(generate_melody_score(req))
@@ -143,7 +143,7 @@ def test_satb_ranges_order_and_spacing_constraints():
 
 def test_musicxml_export_contains_satb_parts_and_harmony():
     req = CompositionRequest(
-        sections=[LyricSection(label="chorus", title="Chorus", text="Sing together forever")],
+        sections=[LyricSection(label="chorus", text="Sing together forever")],
         preferences=CompositionPreferences(),
     )
     satb = harmonize_score(generate_melody_score(req))
@@ -155,6 +155,34 @@ def test_musicxml_export_contains_satb_parts_and_harmony():
     assert "<part-name>Bass</part-name>" in xml
     assert "<harmony>" in xml
 
+
+
+def test_arrangement_order_and_instance_pause_drive_generation():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v", label="Verse", text="Morning glory rises higher"),
+            LyricSection(id="c", label="Chorus", text="Sing together forever"),
+        ],
+        arrangement=[
+            {"section_id": "c", "pause_beats": 0},
+            {"section_id": "v", "pause_beats": 1.5},
+            {"section_id": "c", "pause_beats": 0},
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
+    )
+    melody = generate_melody_score(req)
+
+    assert [s.label for s in melody.sections] == ["Chorus", "Verse", "Chorus"]
+    assert [s.pause_beats for s in melody.sections] == [0, 1.5, 0]
+
+    interlude_rests = [
+        n
+        for m in melody.measures
+        for n in m.voices["soprano"]
+        if n.is_rest and n.section_id == "interlude"
+    ]
+    assert interlude_rests
+    assert abs(sum(n.beats for n in interlude_rests) - 1.5) < 1e-9
 
 def test_preferences_validate_theory_fields():
     prefs = CompositionPreferences(key="Bb", primary_mode="major", time_signature="6/8", tempo_bpm=96)
