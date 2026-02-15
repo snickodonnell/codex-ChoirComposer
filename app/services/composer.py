@@ -221,6 +221,41 @@ def _build_section_progression(scale, section_id: str, start_measure: int, measu
 
 
 
+
+
+def _repair_harmony_progression(chords: list[ScoreChord], measure_count: int, key: str, primary_mode: str | None) -> list[ScoreChord]:
+    scale = parse_key(key, primary_mode)
+    repaired: list[ScoreChord] = []
+
+    for chord in sorted(chords, key=lambda c: c.measure_number):
+        degree = chord.degree if 1 <= chord.degree <= 7 else 1
+        repaired.append(
+            ScoreChord(
+                measure_number=chord.measure_number,
+                section_id=chord.section_id,
+                degree=degree,
+                symbol=chord_symbol(scale, degree),
+                pitch_classes=triad_pitch_classes(scale, degree),
+            )
+        )
+
+    mapped_measures = {ch.measure_number for ch in repaired}
+    fallback_section_id = repaired[0].section_id if repaired else "padding"
+    for measure_number in range(1, measure_count + 1):
+        if measure_number in mapped_measures:
+            continue
+        repaired.append(
+            ScoreChord(
+                measure_number=measure_number,
+                section_id=fallback_section_id,
+                degree=1,
+                symbol=chord_symbol(scale, 1),
+                pitch_classes=triad_pitch_classes(scale, 1),
+            )
+        )
+
+    return sorted(repaired, key=lambda c: c.measure_number)
+
 def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float]]:
     section_defs = {}
     for idx, section in enumerate(req.sections, start=1):
@@ -373,6 +408,8 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         chord_progression.extend(_build_section_progression(scale, section_id, start_measure, section_measures, cluster_cycle))
         beat_cursor += total_beats
 
+    total_measures = max(1, int(max(beat_cursor - 1e-9, 0.0) // beat_cap) + 1)
+    chord_progression = _repair_harmony_progression(chord_progression, total_measures, key, req.preferences.primary_mode)
     chord_by_measure = {ch.measure_number: ch for ch in chord_progression}
 
     soprano_notes: list[ScoreNote] = []
@@ -427,6 +464,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     score = CanonicalScore(
         meta=ScoreMeta(
             key=key,
+            primary_mode=req.preferences.primary_mode,
             time_signature=ts,
             tempo_bpm=tempo,
             style=req.preferences.style,
@@ -447,6 +485,22 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     for attempt_idx in range(MAX_GENERATION_ATTEMPTS):
         attempt = attempt_idx + 1
         score = _compose_melody_once(req, attempt_idx)
+        harmony_issues = [
+            err
+            for err in validate_score(score, primary_mode)
+            if err.startswith("Score must include an explicit chord progression")
+            or err.startswith("Missing chord symbols")
+            or err.startswith("Chord ")
+        ]
+        if harmony_issues:
+            logger.warning("Harmony validation failed on attempt %s before melody repair: %s", attempt, harmony_issues)
+            score.chord_progression = _repair_harmony_progression(
+                score.chord_progression,
+                len(score.measures),
+                score.meta.key,
+                primary_mode,
+            )
+
         errs = validate_score(score, primary_mode)
         if not errs:
             return score
@@ -469,7 +523,7 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
 
 def refine_score(score: CanonicalScore, instruction: str, regenerate: bool) -> CanonicalScore:
     random.seed(instruction)
-    scale_set = set(parse_key(score.meta.key).semitones)
+    scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
     progression = {c.measure_number: c for c in score.chord_progression}
     bpb = beats_per_measure(score.meta.time_signature)
     prev = None
@@ -511,7 +565,7 @@ def harmonize_score(score: CanonicalScore) -> CanonicalScore:
     if not score.chord_progression:
         raise ValueError("Cannot harmonize without chord progression.")
 
-    scale_set = set(parse_key(score.meta.key).semitones)
+    scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
     chord_by_measure = {c.measure_number: c for c in score.chord_progression}
     bpb = beats_per_measure(score.meta.time_signature)
 
@@ -527,7 +581,7 @@ def harmonize_score(score: CanonicalScore) -> CanonicalScore:
     for s in soprano:
         measure_number = int(cursor // bpb) + 1
         chord = chord_by_measure.get(measure_number)
-        chord_tones = set(chord.pitch_classes if chord else parse_key(score.meta.key).semitones)
+        chord_tones = set(chord.pitch_classes if chord else parse_key(score.meta.key, score.meta.primary_mode).semitones)
 
         if s.is_rest:
             for voice in (alto, tenor, bass):

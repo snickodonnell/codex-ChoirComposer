@@ -23,6 +23,13 @@ NOTE_TO_SEMITONE = {
     "Bb": 10,
     "B": 11,
 }
+
+ENHARMONIC_EQUIVALENTS = {
+    "B#": "C",
+    "Cb": "B",
+    "E#": "F",
+    "Fb": "E",
+}
 SEMITONE_TO_NOTE = {v: k for k, v in NOTE_TO_SEMITONE.items() if len(k) == 1 or "#" in k}
 
 MAJOR_PATTERN = [0, 2, 4, 5, 7, 9, 11]
@@ -115,13 +122,25 @@ def parse_key(key: str, primary_mode: str | None = None) -> Scale:
     tonic = cleaned[:-1] if key_marks_minor else cleaned
     tonic = tonic.strip().capitalize()
 
-    mode_minor = {"dorian", "phrygian", "aeolian", "locrian"}
+    mode_minor = {"minor", "dorian", "phrygian", "aeolian", "locrian"}
     mode = (primary_mode or "").strip().lower()
     is_minor = key_marks_minor or mode in mode_minor
 
     if tonic not in NOTE_TO_SEMITONE:
         tonic = "C"
     return Scale(tonic=tonic, is_minor=is_minor)
+
+
+def normalize_note_name(note: str) -> str:
+    cleaned = note.strip()
+    if not cleaned:
+        return "C"
+    if len(cleaned) == 1:
+        normalized = cleaned.upper()
+    else:
+        normalized = f"{cleaned[0].upper()}{cleaned[1:]}"
+    normalized = ENHARMONIC_EQUIVALENTS.get(normalized, normalized)
+    return normalized if normalized in NOTE_TO_SEMITONE else "C"
 
 
 def midi_to_pitch(midi: int) -> str:

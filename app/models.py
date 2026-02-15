@@ -155,6 +155,7 @@ class ScoreChord(BaseModel):
 
 class ScoreMeta(BaseModel):
     key: str
+    primary_mode: PrimaryMode | None = None
     time_signature: str
     tempo_bpm: int
     style: str

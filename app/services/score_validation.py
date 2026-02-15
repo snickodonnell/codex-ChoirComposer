@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from app.models import CanonicalScore, VoiceName
-from app.services.music_theory import VOICE_RANGES, VOICE_TESSITURA, parse_key, pitch_to_midi, triad_pitch_classes
+from app.services.music_theory import NOTE_TO_SEMITONE, VOICE_RANGES, VOICE_TESSITURA, normalize_note_name, parse_key, pitch_to_midi, triad_pitch_classes
 
 MAX_MELODIC_LEAP = 7
 
@@ -15,6 +15,7 @@ def beats_per_measure(time_signature: str) -> float:
 
 def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> list[str]:
     errors: list[str] = []
+    effective_mode = primary_mode if primary_mode is not None else score.meta.primary_mode
     target = beats_per_measure(score.meta.time_signature)
 
     for measure in score.measures:
@@ -23,7 +24,7 @@ def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> li
             if abs(total - target) > 1e-6:
                 errors.append(f"Measure {measure.number} voice {voice} has {total:g} beats; expected {target:g}.")
 
-    errors.extend(_validate_chord_progression(score, primary_mode))
+    errors.extend(_validate_chord_progression(score, effective_mode))
     errors.extend(_validate_lyric_mapping(score))
     errors.extend(_validate_ranges_and_motion(score))
     errors.extend(_validate_harmonic_integrity(score))
@@ -51,6 +52,34 @@ def _is_strong_beat(position: float, time_signature: str) -> bool:
     return abs(quarter_position % 1) < 1e-9
 
 
+
+
+def _chord_symbol_pitch_classes(symbol: str) -> set[int] | None:
+    cleaned = symbol.strip()
+    if not cleaned:
+        return None
+
+    root = cleaned[0]
+    rest = cleaned[1:]
+    if rest and rest[0] in {"#", "b"}:
+        root += rest[0]
+        rest = rest[1:]
+
+    normalized_root = normalize_note_name(root)
+    root_pc = NOTE_TO_SEMITONE[normalized_root]
+
+    quality = rest.lower()
+    if quality.startswith("maj"):
+        quality = ""
+    intervals = [0, 3, 7] if quality.startswith("m") and not quality.startswith("maj") else [0, 4, 7]
+    if "dim" in quality:
+        intervals = [0, 3, 6]
+    return {(root_pc + iv) % 12 for iv in intervals}
+
+
+def _normalized_pitch_classes(pitch_classes: list[int]) -> frozenset[int]:
+    return frozenset(pc % 12 for pc in pitch_classes)
+
 def _validate_chord_progression(score: CanonicalScore, primary_mode: str | None = None) -> list[str]:
     errors: list[str] = []
     if not score.chord_progression:
@@ -63,10 +92,15 @@ def _validate_chord_progression(score: CanonicalScore, primary_mode: str | None 
         errors.append(f"Missing chord symbols for measures: {missing}.")
 
     scale = parse_key(score.meta.key, primary_mode)
-    valid_triads = {tuple(triad_pitch_classes(scale, degree)) for degree in range(1, 8)}
+    valid_triads = {_normalized_pitch_classes(triad_pitch_classes(scale, degree)) for degree in range(1, 8)}
     for chord in score.chord_progression:
-        if tuple(chord.pitch_classes) not in valid_triads:
-            errors.append(f"Chord {chord.symbol} at measure {chord.measure_number} is not diatonic in {score.meta.key}.")
+        chord_pcs = _normalized_pitch_classes(chord.pitch_classes)
+        symbol_pcs = _chord_symbol_pitch_classes(chord.symbol)
+        if chord_pcs in valid_triads:
+            continue
+        if symbol_pcs is not None and symbol_pcs in valid_triads:
+            continue
+        errors.append(f"Chord {chord.symbol} at measure {chord.measure_number} is not diatonic in {score.meta.key} ({primary_mode or 'default mode'}).")
 
     return errors
 

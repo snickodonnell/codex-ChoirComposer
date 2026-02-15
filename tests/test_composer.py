@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.services import composer as composer_service
-from app.models import CompositionPreferences, CompositionRequest, LyricSection
+from app.models import CanonicalScore, CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import generate_melody_score, harmonize_score
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
 from app.services.music_theory import VOICE_RANGES, pitch_to_midi
@@ -261,8 +261,41 @@ def test_validate_score_supports_primary_mode_diatonic_context():
     errors_without_mode = validate_score(melody)
 
     assert errors_with_mode == []
-    assert any("not diatonic" in err for err in errors_without_mode)
+    assert errors_without_mode == []
 
+
+
+def test_d_minor_diatonic_accepts_expected_chords():
+    score = {
+        "meta": {
+            "key": "D",
+            "primary_mode": "aeolian",
+            "time_signature": "4/4",
+            "tempo_bpm": 90,
+            "style": "Hymn",
+            "stage": "melody",
+            "rationale": "test",
+        },
+        "sections": [],
+        "measures": [
+            {
+                "number": i,
+                "voices": {
+                    voice: [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}]
+                    for voice in ["soprano", "alto", "tenor", "bass"]
+                },
+            }
+            for i in range(1, 5)
+        ],
+        "chord_progression": [
+            {"measure_number": 1, "section_id": "sec-1", "symbol": "Dm", "degree": 1, "pitch_classes": [2, 5, 9]},
+            {"measure_number": 2, "section_id": "sec-1", "symbol": "Gm", "degree": 4, "pitch_classes": [7, 10, 2]},
+            {"measure_number": 3, "section_id": "sec-1", "symbol": "Am", "degree": 5, "pitch_classes": [9, 0, 4]},
+            {"measure_number": 4, "section_id": "sec-1", "symbol": "Bb", "degree": 6, "pitch_classes": [10, 2, 5]},
+        ],
+    }
+
+    assert validate_score(CanonicalScore.model_validate(score)) == []
 
 def test_generate_melody_failure_uses_friendly_message(monkeypatch):
     req = CompositionRequest(
