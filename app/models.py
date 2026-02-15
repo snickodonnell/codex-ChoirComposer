@@ -26,10 +26,17 @@ MODE_FAMILIES = {
 
 
 class LyricSection(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=120)
     label: SectionLabel = Field(min_length=1, max_length=80)
-    title: str = Field(min_length=1, max_length=80)
     pause_beats: float = Field(default=0, ge=0, le=4)
     text: str = Field(min_length=1)
+
+
+
+
+class ArrangementItem(BaseModel):
+    section_id: str = Field(min_length=1, max_length=120)
+    pause_beats: float = Field(default=0, ge=0, le=4)
 
 
 class CompositionPreferences(BaseModel):
@@ -97,6 +104,7 @@ class CompositionPreferences(BaseModel):
 
 class CompositionRequest(BaseModel):
     sections: list[LyricSection]
+    arrangement: list[ArrangementItem] = Field(default_factory=list)
     preferences: CompositionPreferences = Field(default_factory=CompositionPreferences)
 
 
@@ -115,7 +123,6 @@ class ScoreSyllable(BaseModel):
 class ScoreSection(BaseModel):
     id: str
     label: SectionLabel = Field(min_length=1, max_length=80)
-    title: str
     pause_beats: float = Field(default=0, ge=0, le=4)
     lyrics: str
     syllables: list[ScoreSyllable]

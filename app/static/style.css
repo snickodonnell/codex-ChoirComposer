@@ -15,8 +15,19 @@ button:hover { background: #1e40af; }
 .section-row-controls .toggle-section-mode { margin-left: auto; background: #1d4ed8; }
 .section-row-controls .toggle-section-mode:hover { background: #1e40af; }
 .section-row[data-mode="saved"] .section-text,
-.section-row[data-mode="saved"] .section-title,
 .section-row[data-mode="saved"] .section-label { background: #f8fafc; }
+.arrangement-controls { display: flex; gap: .5rem; align-items: end; margin: .75rem 0; }
+.arrangement-controls label { flex: 1; margin-bottom: 0; }
+.arrangement-controls button { margin-right: 0; }
+.arrangement-list { display: grid; gap: .5rem; }
+.arrangement-item { border: 1px solid #d1d5db; border-radius: 8px; padding: .45rem .6rem; display: flex; justify-content: space-between; align-items: center; background: #f8fafc; gap: .75rem; }
+.arrangement-item-main { display: flex; flex-direction: column; gap: .35rem; }
+.arrangement-item-main label { margin-bottom: 0; font-size: .8rem; color: #334155; }
+.arrangement-item-main input { max-width: 120px; }
+.arrangement-item-controls { display: flex; gap: .35rem; }
+.arrangement-item-controls button { background: #475569; margin-right: 0; padding: .3rem .55rem; }
+.arrangement-item-controls button:hover { background: #334155; }
+.arrangement-item-meta { font-size: .9rem; color: #0f172a; }
 .actions { display: flex; gap: .5rem; margin: .75rem 0; }
 .actions input { flex: 1; }
 pre { background: #0b1220; color: #e5e7eb; padding: .6rem; border-radius: 8px; overflow: auto; }

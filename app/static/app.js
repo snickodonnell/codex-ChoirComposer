@@ -2,12 +2,15 @@ let melodyScore = null;
 let satbScore = null;
 
 const sectionsEl = document.getElementById('sections');
+const arrangementListEl = document.getElementById('arrangementList');
+const arrangementSectionSelectEl = document.getElementById('arrangementSectionSelect');
 const melodyMeta = document.getElementById('melodyMeta');
 const satbMeta = document.getElementById('satbMeta');
 
 const formErrorsEl = document.getElementById('formErrors');
 const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
 const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
+let sectionIdCounter = 0;
 
 function normalizeMode(mode) {
   const cleaned = (mode || '').trim().toLowerCase();
@@ -76,9 +79,75 @@ function showErrors(errors) {
   formErrorsEl.style.display = 'block';
 }
 
+function getSectionRows() {
+  return [...sectionsEl.querySelectorAll('.section-row')];
+}
+
+function getSectionLibrary() {
+  return getSectionRows().map((row) => ({
+    id: row.dataset.sectionId,
+    label: row.querySelector('.section-label').value.trim(),
+    text: row.querySelector('.section-text').value,
+  }));
+}
+
+function describeSection(sectionId) {
+  const match = getSectionLibrary().find((s) => s.id === sectionId);
+  if (!match) return `Missing section (${sectionId})`;
+  return `${match.label || 'Untitled Label'} (${sectionId})`;
+}
+
+function refreshArrangementLibrarySelect() {
+  const current = arrangementSectionSelectEl.value;
+  const sections = getSectionLibrary();
+  arrangementSectionSelectEl.innerHTML = sections
+    .map((s) => `<option value="${s.id}">${describeSection(s.id)}</option>`)
+    .join('');
+  if (!sections.length) {
+    arrangementSectionSelectEl.innerHTML = '<option value="">No sections available</option>';
+    arrangementSectionSelectEl.disabled = true;
+    return;
+  }
+  arrangementSectionSelectEl.disabled = false;
+  if (sections.some((s) => s.id === current)) {
+    arrangementSectionSelectEl.value = current;
+  }
+}
+
+function addArrangementItem(sectionId, pauseBeats = null) {
+  if (!sectionId) return;
+  const normalizedPause = pauseBeats ?? 0;
+  const item = document.createElement('div');
+  item.className = 'arrangement-item';
+  item.dataset.sectionId = sectionId;
+  item.innerHTML = `
+    <div class="arrangement-item-main">
+      <div class="arrangement-item-meta"></div>
+      <label>Pause after section (beats)
+        <input class="arrangement-pause-beats" type="number" min="0" max="4" step="0.5" value="${normalizedPause}" />
+      </label>
+    </div>
+    <div class="arrangement-item-controls">
+      <button type="button" class="arrangement-up">↑</button>
+      <button type="button" class="arrangement-down">↓</button>
+      <button type="button" class="arrangement-remove">Remove</button>
+    </div>
+  `;
+  arrangementListEl.appendChild(item);
+  refreshArrangementLabels();
+}
+
+function refreshArrangementLabels() {
+  [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item, idx) => {
+    const meta = item.querySelector('.arrangement-item-meta');
+    if (!meta) return;
+    meta.textContent = `${idx + 1}. ${describeSection(item.dataset.sectionId)}`;
+  });
+}
+
 function setSectionMode(row, isSaved) {
   row.dataset.mode = isSaved ? 'saved' : 'edit';
-  const lockable = ['.section-label', '.section-title', '.section-text'];
+  const lockable = ['.section-label', '.section-text'];
   for (const selector of lockable) {
     const el = row.querySelector(selector);
     if (el) el.readOnly = isSaved;
@@ -90,9 +159,10 @@ function setSectionMode(row, isSaved) {
   }
 }
 
-function addSectionRow(defaultLabel = 'verse', title = '', text = '') {
+function addSectionRow(defaultLabel = 'verse', text = '') {
   const row = document.createElement('div');
   row.className = 'section-row';
+  row.dataset.sectionId = `section-${++sectionIdCounter}`;
   row.innerHTML = `
     <div class="section-row-controls">
       <button type="button" class="move-section-up">↑</button>
@@ -100,12 +170,11 @@ function addSectionRow(defaultLabel = 'verse', title = '', text = '') {
       <button type="button" class="toggle-section-mode">Save section</button>
     </div>
     <label>Section Label <input class="section-label" value="${defaultLabel}" placeholder="e.g. Verse, Chorus, Tag" /></label>
-    <label>Title <input class="section-title" value="${title}" placeholder="Verse 1" /></label>
-    <label>Pause after section (beats) <input class="section-pause-beats" type="number" min="0" max="4" step="0.5" value="0" /></label>
     <label>Lyrics <textarea class="section-text" placeholder="Enter lyrics here">${text}</textarea></label>
   `;
   setSectionMode(row, false);
   sectionsEl.appendChild(row);
+  refreshArrangementLibrarySelect();
 }
 
 sectionsEl.addEventListener('click', (event) => {
@@ -118,6 +187,7 @@ sectionsEl.addEventListener('click', (event) => {
     const prev = row.previousElementSibling;
     if (prev) {
       sectionsEl.insertBefore(row, prev);
+      refreshArrangementLibrarySelect();
     }
   }
 
@@ -125,6 +195,7 @@ sectionsEl.addEventListener('click', (event) => {
     const next = row.nextElementSibling;
     if (next) {
       sectionsEl.insertBefore(next, row);
+      refreshArrangementLibrarySelect();
     }
   }
 
@@ -133,23 +204,64 @@ sectionsEl.addEventListener('click', (event) => {
   }
 });
 
+sectionsEl.addEventListener('input', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.classList.contains('section-label')) {
+    refreshArrangementLibrarySelect();
+    refreshArrangementLabels();
+  }
+});
+
+arrangementListEl.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const item = target.closest('.arrangement-item');
+  if (!item) return;
+
+  if (target.classList.contains('arrangement-up')) {
+    const prev = item.previousElementSibling;
+    if (prev) arrangementListEl.insertBefore(item, prev);
+  }
+
+  if (target.classList.contains('arrangement-down')) {
+    const next = item.nextElementSibling;
+    if (next) arrangementListEl.insertBefore(next, item);
+  }
+
+  if (target.classList.contains('arrangement-remove')) {
+    item.remove();
+  }
+
+  refreshArrangementLabels();
+});
+
 function collectPayload() {
   const errors = validatePreferences();
+  const sectionLibrary = getSectionLibrary().filter((s) => s.text.trim().length > 0);
+  const sectionById = new Map(sectionLibrary.map((s) => [s.id, s]));
+  const arrangement = [...arrangementListEl.querySelectorAll('.arrangement-item')].map((item) => ({
+    section_id: item.dataset.sectionId,
+    pause_beats: Number(item.querySelector('.arrangement-pause-beats')?.value) || 0,
+  }));
+
+  if (arrangement.length && !arrangement.every((item) => sectionById.has(item.section_id))) {
+    errors.push('Arrangement references one or more missing sections.');
+  }
+
+  if (arrangement.length && !arrangement.some((item) => sectionById.has(item.section_id))) {
+    errors.push('Arrangement must contain at least one valid section item.');
+  }
+
   if (errors.length) {
     showErrors(errors);
     throw new Error('Please fix the highlighted input validation errors.');
   }
   showErrors([]);
 
-  const sections = [...document.querySelectorAll('.section-row')].map((row, i) => ({
-    label: row.querySelector('.section-label').value,
-    title: row.querySelector('.section-title').value || `Section ${i + 1}`,
-    pause_beats: Number(row.querySelector('.section-pause-beats').value) || 0,
-    text: row.querySelector('.section-text').value
-  })).filter(s => s.text.trim().length > 0);
-
   return {
-    sections,
+    sections: sectionLibrary,
+    arrangement,
     preferences: {
       key: document.getElementById('key').value || null,
       primary_mode: normalizeMode(document.getElementById('primaryMode').value) || null,
@@ -247,9 +359,14 @@ async function playNotes(noteObjects, poly = false) {
 }
 
 document.getElementById('addSection').onclick = () => addSectionRow();
+document.getElementById('addArrangementItem').onclick = () => addArrangementItem(arrangementSectionSelectEl.value);
 
-addSectionRow('verse', 'Verse 1', 'Light in the morning fills every heart');
-addSectionRow('chorus', 'Chorus', 'Sing together, hope forever');
+addSectionRow('verse', 'Light in the morning fills every heart');
+addSectionRow('chorus', 'Sing together, hope forever');
+refreshArrangementLibrarySelect();
+addArrangementItem(getSectionRows()[0]?.dataset.sectionId, 0);
+addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
+addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
 
 document.getElementById('generateMelody').onclick = async () => {
   let res;
