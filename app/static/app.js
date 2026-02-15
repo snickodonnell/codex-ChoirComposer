@@ -6,11 +6,36 @@ const arrangementListEl = document.getElementById('arrangementList');
 const arrangementSectionSelectEl = document.getElementById('arrangementSectionSelect');
 const melodyMeta = document.getElementById('melodyMeta');
 const satbMeta = document.getElementById('satbMeta');
+const workflowStageLabelEl = document.getElementById('workflowStageLabel');
+const workflowStageHintEl = document.getElementById('workflowStageHint');
+
+const generateMelodyBtn = document.getElementById('generateMelody');
+const refineBtn = document.getElementById('refine');
+const regenerateBtn = document.getElementById('regenerate');
+const playMelodyBtn = document.getElementById('playMelody');
+const generateSATBBtn = document.getElementById('generateSATB');
+const playSATBBtn = document.getElementById('playSATB');
+const exportPDFBtn = document.getElementById('exportPDF');
+const exportMusicXMLBtn = document.getElementById('exportMusicXML');
 
 const formErrorsEl = document.getElementById('formErrors');
 const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
 const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
 let sectionIdCounter = 0;
+
+function clearValidationHighlights() {
+  document.querySelectorAll('.field-error').forEach((el) => el.classList.remove('field-error'));
+}
+
+function markFieldError(el) {
+  if (el instanceof HTMLElement) {
+    el.classList.add('field-error');
+  }
+}
+
+function createValidationIssue(message, field = null) {
+  return { message, field };
+}
 
 function normalizeMode(mode) {
   const cleaned = (mode || '').trim().toLowerCase();
@@ -21,48 +46,52 @@ function normalizeMode(mode) {
 
 function validatePreferences() {
   const errors = [];
-  const keyRaw = document.getElementById('key').value?.trim() || '';
-  const modeRaw = document.getElementById('primaryMode').value?.trim() || '';
-  const timeRaw = document.getElementById('time').value?.trim() || '';
-  const tempoRaw = document.getElementById('tempo').value?.trim() || '';
+  const keyEl = document.getElementById('key');
+  const modeEl = document.getElementById('primaryMode');
+  const timeEl = document.getElementById('time');
+  const tempoEl = document.getElementById('tempo');
+  const keyRaw = keyEl.value?.trim() || '';
+  const modeRaw = modeEl.value?.trim() || '';
+  const timeRaw = timeEl.value?.trim() || '';
+  const tempoRaw = tempoEl.value?.trim() || '';
 
   if (keyRaw) {
     const m = keyRaw.match(/^([A-Ga-g])([#b]?)(m?)$/);
     if (!m) {
-      errors.push('Key must look like C, F#, Bb, or Am.');
+      errors.push(createValidationIssue('Key must look like C, F#, Bb, or Am.', keyEl));
     } else {
       const tonic = `${m[1].toUpperCase()}${m[2]}`;
       if (!VALID_TONICS.has(tonic)) {
-        errors.push('Key tonic must be A–G with optional # or b accidental.');
+        errors.push(createValidationIssue('Key tonic must be A–G with optional # or b accidental.', keyEl));
       }
       if (m[3] && modeRaw) {
-        errors.push('Use either minor suffix in key (e.g., Am) OR Primary Mode (e.g., A + aeolian), not both.');
+        errors.push(createValidationIssue('Use either minor suffix in key (e.g., Am) OR Primary Mode (e.g., A + aeolian), not both.', modeEl));
       }
     }
   }
 
   if (modeRaw) {
     if (!VALID_MODES.has(modeRaw.toLowerCase())) {
-      errors.push('Primary Mode must be one of: ionian, dorian, phrygian, lydian, mixolydian, aeolian, locrian (or major/minor).');
+      errors.push(createValidationIssue('Primary Mode must be one of: ionian, dorian, phrygian, lydian, mixolydian, aeolian, locrian (or major/minor).', modeEl));
     }
   }
 
   if (timeRaw) {
     const m = timeRaw.match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/);
     if (!m) {
-      errors.push('Time signature must be formatted like 4/4, 3/4, or 6/8.');
+      errors.push(createValidationIssue('Time signature must be formatted like 4/4, 3/4, or 6/8.', timeEl));
     } else {
       const top = Number(m[1]);
       const bottom = Number(m[2]);
-      if (top < 1 || top > 16) errors.push('Time-signature numerator must be between 1 and 16.');
-      if (![1, 2, 4, 8, 16, 32].includes(bottom)) errors.push('Time-signature denominator must be 1, 2, 4, 8, 16, or 32.');
+      if (top < 1 || top > 16) errors.push(createValidationIssue('Time-signature numerator must be between 1 and 16.', timeEl));
+      if (![1, 2, 4, 8, 16, 32].includes(bottom)) errors.push(createValidationIssue('Time-signature denominator must be 1, 2, 4, 8, 16, or 32.', timeEl));
     }
   }
 
   if (tempoRaw) {
     const tempo = Number(tempoRaw);
     if (!Number.isFinite(tempo) || tempo < 40 || tempo > 240) {
-      errors.push('Tempo must be between 40 and 240 BPM.');
+      errors.push(createValidationIssue('Tempo must be between 40 and 240 BPM.', tempoEl));
     }
   }
 
@@ -70,13 +99,25 @@ function validatePreferences() {
 }
 
 function showErrors(errors) {
+  clearValidationHighlights();
   if (!errors.length) {
     formErrorsEl.textContent = '';
     formErrorsEl.style.display = 'none';
     return;
   }
-  formErrorsEl.innerHTML = errors.map(e => `• ${e}`).join('<br/>');
+  const messages = errors.map((error) => {
+    if (typeof error === 'string') return error;
+    if (error?.field) markFieldError(error.field);
+    return error?.message || String(error);
+  });
+  formErrorsEl.innerHTML = messages.map((message) => `• ${message}`).join('<br/>');
   formErrorsEl.style.display = 'block';
+
+  const firstField = errors.find((error) => error?.field)?.field;
+  if (firstField instanceof HTMLElement) {
+    firstField.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    firstField.focus();
+  }
 }
 
 function getSectionRows() {
@@ -242,22 +283,34 @@ function collectPayload() {
   const errors = validatePreferences();
   const sectionLibrary = getSectionLibrary().filter((s) => s.text.trim().length > 0);
   const sectionById = new Map(sectionLibrary.map((s) => [s.id, s]));
+  const sectionsCard = sectionsEl.closest('.card');
+  const arrangementCard = arrangementListEl.closest('.card');
   const arrangement = [...arrangementListEl.querySelectorAll('.arrangement-item')].map((item) => ({
     section_id: item.dataset.sectionId,
     pause_beats: Number(item.querySelector('.arrangement-pause-beats')?.value) || 0,
   }));
 
+  if (!sectionLibrary.length) {
+    errors.push(createValidationIssue('Please add lyrics to at least one section before generating a melody.', sectionsCard));
+  }
+
   if (arrangement.length && !arrangement.every((item) => sectionById.has(item.section_id))) {
-    errors.push('Arrangement references one or more missing sections.');
+    errors.push(createValidationIssue('Arrangement references one or more missing sections. Remove outdated items and re-add sections from the picker.', arrangementCard));
   }
 
   if (arrangement.length && !arrangement.some((item) => sectionById.has(item.section_id))) {
-    errors.push('Arrangement must contain at least one valid section item.');
+    errors.push(createValidationIssue('Arrangement must contain at least one valid section item with lyrics.', arrangementCard));
+  }
+
+  if (!arrangement.length) {
+    errors.push(createValidationIssue('Add at least one section to the arrangement list so the melody has a song order.', arrangementCard));
   }
 
   if (errors.length) {
     showErrors(errors);
-    throw new Error('Please fix the highlighted input validation errors.');
+    const validationError = new Error('Validation failed');
+    validationError.isValidationError = true;
+    throw validationError;
   }
   showErrors([]);
 
@@ -340,6 +393,58 @@ async function post(url, payload) {
   return res;
 }
 
+
+function setButtonEnabled(button, enabled, disabledReason = '') {
+  button.disabled = !enabled;
+  button.setAttribute('aria-disabled', String(!enabled));
+  if (!enabled && disabledReason) {
+    button.title = disabledReason;
+  } else {
+    button.removeAttribute('title');
+  }
+}
+
+function updateWorkflowStatus() {
+  if (satbScore) {
+    workflowStageLabelEl.textContent = 'Current stage: 4) Export';
+    workflowStageHintEl.textContent = 'SATB is ready. You can preview and export PDF/MusicXML now.';
+    return;
+  }
+
+  if (melodyScore) {
+    workflowStageLabelEl.textContent = 'Current stage: 3) SATB Harmonization';
+    workflowStageHintEl.textContent = 'Melody is ready. Generate SATB next to unlock export.';
+    return;
+  }
+
+  workflowStageLabelEl.textContent = 'Current stage: 2) Melody Draft';
+  workflowStageHintEl.textContent = 'Start by generating a melody from your lyrics and arrangement.';
+}
+
+function updateActionAvailability() {
+  const hasMelody = Boolean(melodyScore);
+  const hasSatb = Boolean(satbScore);
+
+  setButtonEnabled(generateMelodyBtn, true);
+  setButtonEnabled(refineBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(regenerateBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(playMelodyBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(generateSATBBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(playSATBBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(exportPDFBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(exportMusicXMLBtn, hasSatb, 'Generate SATB first.');
+
+  updateWorkflowStatus();
+}
+
+function resetSatbStage() {
+  satbScore = null;
+  satbMeta.textContent = '';
+  document.getElementById('satbChords').textContent = formatChordLine(null);
+  document.getElementById('satbSheet').innerHTML = '';
+  updateActionAvailability();
+}
+
 async function playNotes(noteObjects, poly = false) {
   await Tone.start();
   const now = Tone.now() + 0.2;
@@ -369,51 +474,71 @@ refreshArrangementLibrarySelect();
 addArrangementItem(getSectionRows()[0]?.dataset.sectionId, 0);
 addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
 addArrangementItem(getSectionRows()[1]?.dataset.sectionId, 0);
+updateActionAvailability();
 
-document.getElementById('generateMelody').onclick = async () => {
+generateMelodyBtn.onclick = async () => {
   let res;
   try {
     res = await post('/api/generate-melody', collectPayload());
   } catch (error) {
+    if (error?.isValidationError) return;
     showErrors([String(error.message || error)]);
     return;
   }
   melodyScore = (await res.json()).score;
+  resetSatbStage();
   document.getElementById('melodySheet').innerHTML = '';
   const notes = flattenVoice(melodyScore, 'soprano');
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', 'Melody', notes, melodyScore.meta.time_signature);
+  updateActionAvailability();
 };
 
-document.getElementById('refine').onclick = async () => {
-  if (!melodyScore) return;
+refineBtn.onclick = async () => {
+  if (!melodyScore) {
+    showErrors(['Generate a melody before refining.']);
+    return;
+  }
   const instruction = document.getElementById('instruction').value || 'smooth out leaps';
   const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: false });
   melodyScore = (await res.json()).score;
+  resetSatbStage();
   document.getElementById('melodySheet').innerHTML = '';
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', 'Melody (refined)', flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
+  updateActionAvailability();
 };
 
-document.getElementById('regenerate').onclick = async () => {
-  if (!melodyScore) return;
+regenerateBtn.onclick = async () => {
+  if (!melodyScore) {
+    showErrors(['Generate a melody before regenerating.']);
+    return;
+  }
   const instruction = document.getElementById('instruction').value || 'fresh melodic idea';
   const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: true });
   melodyScore = (await res.json()).score;
+  resetSatbStage();
   document.getElementById('melodySheet').innerHTML = '';
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', 'Melody (regenerated)', flattenVoice(melodyScore, 'soprano'), melodyScore.meta.time_signature);
+  updateActionAvailability();
 };
 
-document.getElementById('playMelody').onclick = async () => {
-  if (!melodyScore) return;
+playMelodyBtn.onclick = async () => {
+  if (!melodyScore) {
+    showErrors(['Generate a melody before playback.']);
+    return;
+  }
   const notes = flattenVoice(melodyScore, 'soprano').map(n => ({ pitch: n.pitch, seconds: (60 / melodyScore.meta.tempo_bpm) * n.beats }));
   await playNotes(notes, false);
 };
 
-document.getElementById('generateSATB').onclick = async () => {
-  if (!melodyScore) return;
+generateSATBBtn.onclick = async () => {
+  if (!melodyScore) {
+    showErrors(['Generate a melody before SATB harmonization.']);
+    return;
+  }
   const res = await post('/api/generate-satb', { score: melodyScore });
   const payload = await res.json();
   satbScore = payload.score;
@@ -421,10 +546,14 @@ document.getElementById('generateSATB').onclick = async () => {
   document.getElementById('satbChords').textContent = formatChordLine(satbScore);
   document.getElementById('satbSheet').innerHTML = '';
   ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v), satbScore.meta.time_signature));
+  updateActionAvailability();
 };
 
-document.getElementById('playSATB').onclick = async () => {
-  if (!satbScore) return;
+playSATBBtn.onclick = async () => {
+  if (!satbScore) {
+    showErrors(['Generate SATB before playback.']);
+    return;
+  }
   const soprano = flattenVoice(satbScore, 'soprano');
   const alto = flattenVoice(satbScore, 'alto');
   const tenor = flattenVoice(satbScore, 'tenor');
@@ -436,8 +565,11 @@ document.getElementById('playSATB').onclick = async () => {
   await playNotes(chords, true);
 };
 
-document.getElementById('exportPDF').onclick = async () => {
-  if (!satbScore) return;
+exportPDFBtn.onclick = async () => {
+  if (!satbScore) {
+    showErrors(['Generate SATB before exporting PDF.']);
+    return;
+  }
   const res = await post('/api/export-pdf', { score: satbScore });
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -449,8 +581,11 @@ document.getElementById('exportPDF').onclick = async () => {
 };
 
 
-document.getElementById('exportMusicXML').onclick = async () => {
-  if (!satbScore) return;
+exportMusicXMLBtn.onclick = async () => {
+  if (!satbScore) {
+    showErrors(['Generate SATB before exporting MusicXML.']);
+    return;
+  }
   const res = await post('/api/export-musicxml', { score: satbScore });
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
