@@ -30,6 +30,7 @@ from app.services.music_theory import (
     pitch_to_midi,
     triad_pitch_classes,
 )
+from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import beats_per_measure, validate_score
 
 MAX_MELODIC_LEAP = 7
@@ -339,7 +340,7 @@ def _auto_repair_melody_score(score: CanonicalScore, primary_mode: str | None) -
     _repair_key_mode_mismatch(score, primary_mode)
     _repair_soprano_strong_beats(score, primary_mode)
     score.chord_progression.sort(key=lambda chord: chord.measure_number)
-    return score
+    return normalize_score_for_rendering(score)
 
 
 def _measure_count_by_section(score: CanonicalScore) -> dict[str, int]:
@@ -544,12 +545,13 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
                 primary_mode,
             )
 
+        score = normalize_score_for_rendering(score)
         errs = validate_score(score, primary_mode)
         if not errs:
             return score
 
         logger.warning("Melody validation failed on attempt %s before repair: %s", attempt, errs)
-        repaired = _auto_repair_melody_score(score, primary_mode)
+        repaired = normalize_score_for_rendering(_auto_repair_melody_score(score, primary_mode))
         repaired_errs = validate_score(repaired, primary_mode)
         if not repaired_errs:
             logger.info("Melody auto-repair succeeded on attempt %s.", attempt)
@@ -571,6 +573,7 @@ def refine_score(
     selected_clusters: list[str] | None = None,
     section_clusters: dict[str, str] | None = None,
 ) -> CanonicalScore:
+    score = normalize_score_for_rendering(score)
     random.seed(instruction)
     scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
     if regenerate:
@@ -613,10 +616,11 @@ def refine_score(
     errs = validate_score(score)
     if errs:
         raise ValueError(f"Refined score failed validation: {'; '.join(errs)}")
-    return score
+    return normalize_score_for_rendering(score)
 
 
 def harmonize_score(score: CanonicalScore) -> CanonicalScore:
+    score = normalize_score_for_rendering(score)
     if not score.chord_progression:
         raise ValueError("Cannot harmonize without chord progression.")
 
@@ -690,6 +694,7 @@ def harmonize_score(score: CanonicalScore) -> CanonicalScore:
         measures=_pack_measures({"soprano": [n.model_copy() for n in soprano], "alto": alto, "tenor": tenor, "bass": bass}, score.meta.time_signature),
         chord_progression=score.chord_progression,
     )
+    satb = normalize_score_for_rendering(satb)
     errs = validate_score(satb)
     if errs:
         raise ValueError(f"SATB score failed validation: {'; '.join(errs)}")
