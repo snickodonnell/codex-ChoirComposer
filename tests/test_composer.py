@@ -281,7 +281,7 @@ def test_preferences_reject_invalid_theory_values():
         CompositionPreferences(time_signature="5/3")
 
     with pytest.raises(ValidationError):
-        CompositionPreferences(tempo_bpm=300)
+        CompositionPreferences(tempo_bpm=301)
 
     with pytest.raises(ValidationError):
         CompositionPreferences(key="Am", primary_mode="aeolian")

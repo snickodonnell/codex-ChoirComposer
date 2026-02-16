@@ -44,7 +44,7 @@ class CompositionPreferences(BaseModel):
     key: str | None = None
     primary_mode: PrimaryMode | None = None
     time_signature: str | None = None
-    tempo_bpm: int | None = Field(default=None, ge=40, le=240)
+    tempo_bpm: int | None = Field(default=None, ge=30, le=300)
     style: str = Field(default="Contemporary Worship", min_length=2, max_length=120)
     mood: MoodName = "Uplifting"
     lyric_rhythm_preset: LyricRhythmPreset = "mixed"

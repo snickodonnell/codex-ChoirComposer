@@ -354,6 +354,7 @@ def _regenerate_progression_for_clusters(
     score: CanonicalScore,
     section_clusters: dict[str, str],
     selected_clusters: list[str],
+    rng: random.Random,
 ) -> list[ScoreChord]:
     if not score.chord_progression:
         return []
@@ -384,13 +385,20 @@ def _regenerate_progression_for_clusters(
             cycle = regenerated_cycles.get(cluster)
             if cycle is None:
                 base_cycle = _cluster_progression_cycle(scale, cluster)
-                rotation = random.randrange(len(base_cycle))
+                rotation = rng.randrange(len(base_cycle))
                 cycle = base_cycle[rotation:] + base_cycle[:rotation]
-                if random.random() > 0.5:
+                if rng.random() > 0.5:
                     cycle = list(reversed(cycle))
                 regenerated_cycles[cluster] = cycle
             start_measure = section_chords[0].measure_number
-            regenerated.extend(_build_section_progression(scale, section_id, start_measure, measure_count, cycle))
+            regenerated_section = _build_section_progression(scale, section_id, start_measure, measure_count, cycle)
+            previous_degrees = [chord.degree for chord in section_chords]
+            regenerated_degrees = [chord.degree for chord in regenerated_section]
+            if regenerated_degrees == previous_degrees and len(cycle) > 1:
+                shifted_cycle = cycle[1:] + cycle[:1]
+                regenerated_cycles[cluster] = shifted_cycle
+                regenerated_section = _build_section_progression(scale, section_id, start_measure, measure_count, shifted_cycle)
+            regenerated.extend(regenerated_section)
             continue
 
         regenerated.extend(section_chords)
@@ -574,13 +582,14 @@ def refine_score(
     section_clusters: dict[str, str] | None = None,
 ) -> CanonicalScore:
     score = normalize_score_for_rendering(score)
-    random.seed(instruction)
+    rng = random.Random() if regenerate else random.Random(instruction)
     scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
     if regenerate:
         score.chord_progression = _regenerate_progression_for_clusters(
             score,
             section_clusters or {},
             selected_clusters or [],
+            rng,
         )
     progression = {c.measure_number: c for c in score.chord_progression}
     bpb = beats_per_measure(score.meta.time_signature)
@@ -594,7 +603,7 @@ def refine_score(
         midi = pitch_to_midi(note.pitch)
         basis = midi if prev is None else prev
         if regenerate:
-            midi += random.choice([-3, -2, -1, 1, 2, 3])
+            midi += rng.choice([-3, -2, -1, 1, 2, 3])
         elif "higher" in instruction.lower() and note.lyric_mode in {"single", "melisma_start"}:
             midi += 2
         elif "lower" in instruction.lower() and note.lyric_mode in {"single", "melisma_start"}:

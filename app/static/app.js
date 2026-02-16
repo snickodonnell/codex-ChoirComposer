@@ -10,13 +10,18 @@ const workflowStageLabelEl = document.getElementById('workflowStageLabel');
 const workflowStageHintEl = document.getElementById('workflowStageHint');
 const regenerateClustersEl = document.getElementById('regenerateClusters');
 const draftVersionSelectEl = document.getElementById('draftVersionSelect');
+const satbDraftVersionSelectEl = document.getElementById('satbDraftVersionSelect');
 
 const generateMelodyBtn = document.getElementById('generateMelody');
 const refineBtn = document.getElementById('refine');
 const regenerateBtn = document.getElementById('regenerate');
-const playMelodyBtn = document.getElementById('playMelody');
+const startMelodyBtn = document.getElementById('startMelody');
+const pauseMelodyBtn = document.getElementById('pauseMelody');
+const stopMelodyBtn = document.getElementById('stopMelody');
 const generateSATBBtn = document.getElementById('generateSATB');
-const playSATBBtn = document.getElementById('playSATB');
+const startSATBBtn = document.getElementById('startSATB');
+const pauseSATBBtn = document.getElementById('pauseSATB');
+const stopSATBBtn = document.getElementById('stopSATB');
 const exportPDFBtn = document.getElementById('exportPDF');
 const exportMusicXMLBtn = document.getElementById('exportMusicXML');
 const loadTestDataBtn = document.getElementById('loadTestData');
@@ -28,6 +33,9 @@ let sectionIdCounter = 0;
 const MAX_DRAFT_VERSIONS = 20;
 let melodyDraftVersions = [];
 let activeDraftVersionId = null;
+let satbDraftVersionsByMelodyVersion = new Map();
+let activeSatbDraftVersionId = null;
+let activePlayback = null;
 
 function resolveApiBaseUrl() {
   if (window.location.protocol === 'file:') {
@@ -107,8 +115,8 @@ function validatePreferences() {
 
   if (tempoRaw) {
     const tempo = Number(tempoRaw);
-    if (!Number.isFinite(tempo) || tempo < 40 || tempo > 240) {
-      errors.push(createValidationIssue('Tempo must be between 40 and 240 BPM.', tempoEl));
+    if (!Number.isFinite(tempo) || tempo < 30 || tempo > 300) {
+      errors.push(createValidationIssue('Tempo must be between 30 and 300 BPM.', tempoEl));
     }
   }
 
@@ -220,6 +228,157 @@ function renderMelody(score, heading = 'Melody') {
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano', { includeRests: true }), melodyScore.meta.time_signature, buildSectionBoundaryMap(melodyScore));
+}
+
+function activeMelodyVersionId() {
+  return activeDraftVersionId || null;
+}
+
+function activeSatbDraftVersions() {
+  const melodyVersionId = activeMelodyVersionId();
+  if (!melodyVersionId) return [];
+  return satbDraftVersionsByMelodyVersion.get(melodyVersionId) || [];
+}
+
+function activeSatbDraftVersion() {
+  return activeSatbDraftVersions().find((version) => version.id === activeSatbDraftVersionId) || null;
+}
+
+function updateSatbDraftVersionOptions() {
+  const satbDraftVersions = activeSatbDraftVersions();
+  if (!satbDraftVersions.length) {
+    satbDraftVersionSelectEl.innerHTML = '<option value="">No versions yet</option>';
+    satbDraftVersionSelectEl.disabled = true;
+    return;
+  }
+  satbDraftVersionSelectEl.disabled = false;
+  satbDraftVersionSelectEl.innerHTML = satbDraftVersions
+    .map((version, idx) => `<option value="${version.id}">v${idx + 1} · ${version.label}</option>`)
+    .join('');
+  if (activeSatbDraftVersionId) {
+    satbDraftVersionSelectEl.value = activeSatbDraftVersionId;
+  }
+}
+
+function renderSatb(score, harmonizationNotes = null, heading = 'SATB') {
+  satbScore = normalizeScoreForRendering(score);
+  satbMeta.textContent = JSON.stringify({
+    ...satbScore.meta,
+    harmonization: harmonizationNotes || 'Chord-led SATB voicing with diatonic progression integrity checks.',
+  }, null, 2);
+  document.getElementById('satbChords').textContent = formatChordLine(satbScore);
+  document.getElementById('satbSheet').innerHTML = '';
+
+  const boundaryMap = buildSectionBoundaryMap(satbScore);
+  ['soprano', 'alto', 'tenor', 'bass'].forEach((v) => drawStaff('satbSheet', heading === 'SATB' ? v.toUpperCase() : `${heading} · ${v.toUpperCase()}`, flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
+}
+
+function safeRenderSatb(score, harmonizationNotes, heading = 'SATB') {
+  try {
+    renderSatb(score, harmonizationNotes, heading);
+    return true;
+  } catch (_) {
+    try {
+      renderSatb(normalizeScoreForRendering(score), harmonizationNotes, heading);
+      return true;
+    } catch (_) {
+      showErrors(['SATB generated, but score rendering is temporarily unavailable. Playback/export still work.']);
+      return false;
+    }
+  }
+}
+
+function appendSatbDraftVersion(score, harmonizationNotes, label, melodyVersionId = activeMelodyVersionId()) {
+  if (!melodyVersionId) {
+    showErrors(['Generate or select a melody draft before creating SATB drafts.']);
+    return;
+  }
+  const version = {
+    id: `satb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    melodyVersionId,
+    score,
+    harmonizationNotes,
+    label,
+  };
+  const satbDraftVersions = [...(satbDraftVersionsByMelodyVersion.get(melodyVersionId) || []), version];
+  const capped = satbDraftVersions.length > MAX_DRAFT_VERSIONS
+    ? satbDraftVersions.slice(satbDraftVersions.length - MAX_DRAFT_VERSIONS)
+    : satbDraftVersions;
+  satbDraftVersionsByMelodyVersion.set(melodyVersionId, capped);
+  activeSatbDraftVersionId = version.id;
+  safeRenderSatb(score, harmonizationNotes, label);
+  updateSatbDraftVersionOptions();
+}
+
+function fingerprintNotes(events) {
+  return events.map((event) => `${event.pitches.join('+')}@${event.seconds.toFixed(4)}`).join('|');
+}
+
+function stopActivePlayback() {
+  if (!activePlayback) return;
+  if (activePlayback.finishEventId != null) {
+    Tone.Transport.clear(activePlayback.finishEventId);
+  }
+  activePlayback.part.dispose();
+  activePlayback.synth.dispose();
+  Tone.Transport.stop();
+  Tone.Transport.cancel(0);
+  activePlayback = null;
+}
+
+async function startPlayback(playback) {
+  await Tone.start();
+  if (activePlayback) {
+    if (activePlayback.id === playback.id && activePlayback.state === 'playing') {
+      return;
+    }
+    if (activePlayback.id !== playback.id) {
+      stopActivePlayback();
+    }
+  }
+
+  if (activePlayback && activePlayback.id === playback.id && activePlayback.state === 'paused') {
+    Tone.Transport.start();
+    activePlayback.state = 'playing';
+    return;
+  }
+
+  Tone.Transport.stop();
+  Tone.Transport.cancel(0);
+  const synth = playback.poly ? new Tone.PolySynth(Tone.Synth).toDestination() : new Tone.Synth().toDestination();
+  const part = new Tone.Part((time, event) => {
+    if (playback.poly) {
+      synth.triggerAttackRelease(event.pitches, event.seconds, time);
+      return;
+    }
+    synth.triggerAttackRelease(event.pitches[0], event.seconds, time);
+  }, playback.events.map((event) => [event.time, event])).start(0);
+
+  const finishEventId = Tone.Transport.scheduleOnce(() => {
+    if (activePlayback?.id === playback.id) {
+      stopActivePlayback();
+    }
+  }, playback.totalSeconds + 0.1);
+
+  activePlayback = {
+    ...playback,
+    synth,
+    part,
+    finishEventId,
+    state: 'playing',
+  };
+  Tone.Transport.start();
+}
+
+function pausePlayback(type) {
+  if (!activePlayback || activePlayback.type !== type || activePlayback.state !== 'playing') return;
+  Tone.Transport.pause();
+  activePlayback.state = 'paused';
+}
+
+function stopPlayback(type) {
+  if (!activePlayback || activePlayback.type !== type) return;
+  stopActivePlayback();
 }
 
 function upsertActiveVersion(score, label) {
@@ -342,6 +501,9 @@ function loadHymnTestData() {
   satbScore = null;
   melodyDraftVersions = [];
   activeDraftVersionId = null;
+  satbDraftVersionsByMelodyVersion = new Map();
+  activeSatbDraftVersionId = null;
+  stopActivePlayback();
   document.getElementById('melodySheet').innerHTML = '';
   document.getElementById('satbSheet').innerHTML = '';
   document.getElementById('melodyChords').textContent = formatChordLine(null);
@@ -355,6 +517,7 @@ function loadHymnTestData() {
   refreshArrangementLabels();
   refreshRegenerateClusterOptions();
   updateDraftVersionOptions();
+  updateSatbDraftVersionOptions();
   updateActionAvailability();
 }
 
@@ -798,9 +961,13 @@ function updateActionAvailability() {
   setButtonEnabled(generateMelodyBtn, true);
   setButtonEnabled(refineBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(regenerateBtn, hasMelody, 'Generate a melody first.');
-  setButtonEnabled(playMelodyBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(startMelodyBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(pauseMelodyBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(stopMelodyBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(generateSATBBtn, hasMelody, 'Generate a melody first.');
-  setButtonEnabled(playSATBBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(startSATBBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(pauseSATBBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(stopSATBBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(exportPDFBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(exportMusicXMLBtn, hasSatb, 'Generate SATB first.');
 
@@ -822,32 +989,31 @@ function safeRenderMelody(score, heading) {
   }
 }
 
-function resetSatbStage() {
+function resetSatbStage({ clearHistory = false } = {}) {
+  stopPlayback('satb');
   satbScore = null;
+  activeSatbDraftVersionId = null;
+  if (clearHistory) {
+    satbDraftVersionsByMelodyVersion = new Map();
+  }
   satbMeta.textContent = '';
   document.getElementById('satbChords').textContent = formatChordLine(null);
   document.getElementById('satbSheet').innerHTML = '';
+  updateSatbDraftVersionOptions();
   updateActionAvailability();
 }
 
-async function playNotes(noteObjects, poly = false) {
-  await Tone.start();
-  const now = Tone.now() + 0.2;
-  if (poly) {
-    const synth = new Tone.PolySynth(Tone.Synth).toDestination();
-    let t = now;
-    for (const chord of noteObjects) {
-      synth.triggerAttackRelease(chord.pitches, chord.seconds, t);
-      t += chord.seconds;
-    }
-  } else {
-    const synth = new Tone.Synth().toDestination();
-    let t = now;
-    for (const n of noteObjects) {
-      synth.triggerAttackRelease(n.pitch, n.seconds, t);
-      t += n.seconds;
-    }
+function syncSatbStageForActiveMelody() {
+  const satbVersions = activeSatbDraftVersions();
+  if (!satbVersions.length) {
+    resetSatbStage();
+    return;
   }
+  const preferred = satbVersions.find((version) => version.id === activeSatbDraftVersionId) || satbVersions[satbVersions.length - 1];
+  activeSatbDraftVersionId = preferred.id;
+  safeRenderSatb(preferred.score, preferred.harmonizationNotes, preferred.label);
+  updateSatbDraftVersionOptions();
+  updateActionAvailability();
 }
 
 document.getElementById('addSection').onclick = () => addSectionRow();
@@ -872,7 +1038,7 @@ generateMelodyBtn.onclick = async () => {
   melodyDraftVersions = [];
   activeDraftVersionId = null;
   appendDraftVersion(score, sectionClusterMap, 'Melody');
-  resetSatbStage();
+  resetSatbStage({ clearHistory: true });
   updateActionAvailability();
 };
 
@@ -882,9 +1048,13 @@ refineBtn.onclick = async () => {
     return;
   }
   const instruction = document.getElementById('instruction').value || 'smooth out leaps';
+  const melodyVersionId = activeMelodyVersionId();
   const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: false });
   const score = (await res.json()).score;
   upsertActiveVersion(score, 'Melody (refined)');
+  if (melodyVersionId) {
+    satbDraftVersionsByMelodyVersion.delete(melodyVersionId);
+  }
   resetSatbStage();
   updateActionAvailability();
 };
@@ -916,18 +1086,35 @@ draftVersionSelectEl.onchange = () => {
   if (!version) return;
   activeDraftVersionId = version.id;
   safeRenderMelody(version.score, version.label);
-  resetSatbStage();
-  updateActionAvailability();
+  syncSatbStageForActiveMelody();
 };
 
-playMelodyBtn.onclick = async () => {
+startMelodyBtn.onclick = async () => {
   if (!melodyScore) {
     showErrors(['Generate a melody before playback.']);
     return;
   }
-  const notes = flattenVoice(melodyScore, 'soprano').map(n => ({ pitch: n.pitch, seconds: (60 / melodyScore.meta.tempo_bpm) * n.beats }));
-  await playNotes(notes, false);
+  const events = flattenVoice(melodyScore, 'soprano').map((n) => ({
+    pitches: [n.pitch],
+    seconds: (60 / melodyScore.meta.tempo_bpm) * n.beats,
+  }));
+  let cursor = 0;
+  const timedEvents = events.map((event) => {
+    const current = { ...event, time: cursor };
+    cursor += event.seconds;
+    return current;
+  });
+  await startPlayback({
+    id: `melody:${fingerprintNotes(events)}:${melodyScore.meta.tempo_bpm}`,
+    type: 'melody',
+    poly: false,
+    events: timedEvents,
+    totalSeconds: cursor,
+  });
 };
+
+pauseMelodyBtn.onclick = () => pausePlayback('melody');
+stopMelodyBtn.onclick = () => stopPlayback('melody');
 
 generateSATBBtn.onclick = async () => {
   if (!melodyScore) {
@@ -936,26 +1123,20 @@ generateSATBBtn.onclick = async () => {
   }
   const res = await post('/api/generate-satb', { score: melodyScore });
   const payload = await res.json();
-  satbScore = normalizeScoreForRendering(payload.score);
-  satbMeta.textContent = JSON.stringify({ ...satbScore.meta, harmonization: payload.harmonization_notes }, null, 2);
-  document.getElementById('satbChords').textContent = formatChordLine(satbScore);
+  appendSatbDraftVersion(payload.score, payload.harmonization_notes, 'SATB');
   updateActionAvailability();
-  document.getElementById('satbSheet').innerHTML = '';
-  try {
-    const boundaryMap = buildSectionBoundaryMap(satbScore);
-    ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
-  } catch (_) {
-    try {
-      satbScore = normalizeScoreForRendering(satbScore);
-      const boundaryMap = buildSectionBoundaryMap(satbScore);
-      ['soprano', 'alto', 'tenor', 'bass'].forEach(v => drawStaff('satbSheet', v.toUpperCase(), flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
-    } catch (_) {
-      showErrors(['SATB generated, but score rendering is temporarily unavailable. Playback/export still work.']);
-    }
-  }
 };
 
-playSATBBtn.onclick = async () => {
+satbDraftVersionSelectEl.onchange = () => {
+  const selectedId = satbDraftVersionSelectEl.value;
+  const version = activeSatbDraftVersions().find((item) => item.id === selectedId);
+  if (!version) return;
+  activeSatbDraftVersionId = version.id;
+  safeRenderSatb(version.score, version.harmonizationNotes, version.label);
+  updateActionAvailability();
+};
+
+startSATBBtn.onclick = async () => {
   if (!satbScore) {
     showErrors(['Generate SATB before playback.']);
     return;
@@ -964,12 +1145,27 @@ playSATBBtn.onclick = async () => {
   const alto = flattenVoice(satbScore, 'alto');
   const tenor = flattenVoice(satbScore, 'tenor');
   const bass = flattenVoice(satbScore, 'bass');
-  const chords = soprano.map((sn, i) => ({
+  const chordEvents = soprano.map((sn, i) => ({
     pitches: [sn.pitch, alto[i]?.pitch, tenor[i]?.pitch, bass[i]?.pitch].filter(Boolean),
     seconds: (60 / satbScore.meta.tempo_bpm) * sn.beats,
   }));
-  await playNotes(chords, true);
+  let cursor = 0;
+  const timedEvents = chordEvents.map((event) => {
+    const current = { ...event, time: cursor };
+    cursor += event.seconds;
+    return current;
+  });
+  await startPlayback({
+    id: `satb:${fingerprintNotes(chordEvents)}:${satbScore.meta.tempo_bpm}`,
+    type: 'satb',
+    poly: true,
+    events: timedEvents,
+    totalSeconds: cursor,
+  });
 };
+
+pauseSATBBtn.onclick = () => pausePlayback('satb');
+stopSATBBtn.onclick = () => stopPlayback('satb');
 
 exportPDFBtn.onclick = async () => {
   if (!satbScore) {
