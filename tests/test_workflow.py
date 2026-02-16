@@ -1,5 +1,8 @@
+import logging
+
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.main import app
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import generate_melody_score, harmonize_score
@@ -22,7 +25,8 @@ def test_generate_satb_rejects_satb_input_stage():
     res = client.post("/api/generate-satb", json={"score": satb.model_dump()})
 
     assert res.status_code == 422
-    assert "requires a melody score" in res.json()["detail"]
+    assert "SATB generation failed" in res.json()["detail"]["message"]
+    assert res.json()["detail"]["request_id"]
 
 
 def test_export_pdf_requires_satb_stage():
@@ -31,7 +35,8 @@ def test_export_pdf_requires_satb_stage():
     res = client.post("/api/export-pdf", json={"score": melody.model_dump()})
 
     assert res.status_code == 422
-    assert "PDF export requires a satb score" in res.json()["detail"]
+    assert "PDF export failed" in res.json()["detail"]["message"]
+    assert res.json()["detail"]["request_id"]
 
 
 def test_compose_end_score_endpoint_runs_full_workflow():
@@ -92,4 +97,26 @@ def test_refine_satb_rejects_melody_input_stage():
     )
 
     assert res.status_code == 422
-    assert "requires a satb score" in res.json()["detail"]
+    assert "SATB refinement failed" in res.json()["detail"]["message"]
+    assert res.json()["detail"]["request_id"]
+
+
+def test_request_id_header_present_on_response():
+    req = _sample_request()
+
+    res = client.post("/api/compose-end-score", json=req.model_dump())
+
+    assert res.status_code == 200
+    assert res.headers.get("X-Request-ID")
+
+
+def test_validation_failure_logs_event(caplog, monkeypatch):
+    melody = generate_melody_score(_sample_request())
+
+    monkeypatch.setattr(main_module, "validate_score", lambda *_args, **_kwargs: ["diagnostic: strong beat conflict"] )
+
+    with caplog.at_level(logging.ERROR):
+        res = client.post("/api/generate-satb", json={"score": melody.model_dump()})
+
+    assert res.status_code == 422
+    assert any(getattr(record, "event", "") == "validation_failed" for record in caplog.records)

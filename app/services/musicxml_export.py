@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
+
+from app.logging_utils import log_event
 from app.models import CanonicalScore, VoiceName
+
+logger = logging.getLogger(__name__)
 
 
 def export_musicxml(score: CanonicalScore) -> str:
+    log_event(logger, "musicxml_render_started", measure_count=len(score.measures))
     divisions = 1
     beats, beat_type = score.meta.time_signature.split("/")
     beats_i = int(beats)
@@ -100,7 +106,9 @@ def export_musicxml(score: CanonicalScore) -> str:
         lines.append("  </part>")
 
     lines.append("</score-partwise>")
-    return "\n".join(lines)
+    content = "\n".join(lines)
+    log_event(logger, "musicxml_render_completed", output_size_bytes=len(content.encode("utf-8")), measure_count=len(score.measures))
+    return content
 
 
 def _escape_xml(value: str) -> str:
