@@ -341,8 +341,74 @@ def _auto_repair_melody_score(score: CanonicalScore, primary_mode: str | None) -
     _repair_missing_chords(score, primary_mode)
     _repair_key_mode_mismatch(score, primary_mode)
     _repair_soprano_strong_beats(score, primary_mode)
+    _repair_phrase_end_barlines(score)
     score.chord_progression.sort(key=lambda chord: chord.measure_number)
     return normalize_score_for_rendering(score)
+
+
+def _repair_phrase_end_barlines(score: CanonicalScore) -> None:
+    if score.meta.stage != "melody":
+        return
+
+    beat_cap = beats_per_measure(score.meta.time_signature)
+    phrase_end_ids = {
+        syllable.id
+        for section in score.sections
+        for syllable in section.syllables
+        if syllable.phrase_end_after
+    }
+    if not phrase_end_ids:
+        return
+
+    soprano_notes = _flatten_voice(score, "soprano")
+    last_index_by_syllable: dict[str, int] = {}
+    for idx, note in enumerate(soprano_notes):
+        if note.is_rest or note.lyric_syllable_id is None:
+            continue
+        last_index_by_syllable[note.lyric_syllable_id] = idx
+
+    cursor = 0.0
+    repairs: list[dict[str, float | str]] = []
+    for idx, note in enumerate(soprano_notes):
+        end_pos = cursor + note.beats
+        syllable_id = note.lyric_syllable_id
+        is_phrase_end = (
+            not note.is_rest
+            and syllable_id in phrase_end_ids
+            and last_index_by_syllable.get(syllable_id) == idx
+        )
+        if is_phrase_end:
+            end_mod = end_pos % beat_cap
+            if abs(end_mod) > 1e-6:
+                extension = beat_cap - end_mod
+                note.beats += extension
+                end_pos += extension
+                repairs.append(
+                    {
+                        "syllable_id": syllable_id,
+                        "extended_beats": round(extension, 6),
+                        "repaired_end_beat": round(end_pos, 6),
+                    }
+                )
+        cursor = end_pos
+
+    if not repairs:
+        return
+
+    score.measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, score.meta.time_signature)
+    score.chord_progression = _repair_harmony_progression(
+        score.chord_progression,
+        len(score.measures),
+        score.meta.key,
+        score.meta.primary_mode,
+    )
+    log_event(
+        logger,
+        "phrase_barline_repair_applied",
+        level=logging.WARNING,
+        repaired_phrase_count=len(repairs),
+        diagnostics=repairs,
+    )
 
 
 def _measure_count_by_section(score: CanonicalScore) -> dict[str, int]:
