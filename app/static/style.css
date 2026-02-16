@@ -43,3 +43,14 @@ pre { background: #0b1220; color: #e5e7eb; padding: .6rem; border-radius: 8px; o
 .form-errors { display: none; margin-top: .6rem; padding: .5rem .6rem; border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 8px; font-size: .9rem; }
 
 .field-error { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220, 38, 38, .15); }
+
+.preview-panel { border: 1px solid #dbe3ef; border-radius: 10px; padding: .6rem; margin-top: .75rem; background: #f8fbff; }
+.preview-panel h3 { margin: 0; font-size: 1rem; }
+.preview-panel-header { display: flex; justify-content: space-between; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.preview-panel-header .actions { margin: 0; align-items: center; }
+.preview-panel-header label { margin: 0; font-size: .85rem; display: flex; align-items: center; gap: .45rem; }
+.preview-panel-header input[type="range"] { margin-top: 0; }
+.preview-status { font-size: .85rem; color: #334155; margin: .5rem 0; }
+.preview-svg-wrap { display: grid; gap: .75rem; }
+.preview-svg-page { background: white; border: 1px solid #d1d5db; border-radius: 8px; padding: .35rem; overflow: auto; }
+.preview-svg-page svg { width: 100%; height: auto; display: block; transform-origin: top left; }

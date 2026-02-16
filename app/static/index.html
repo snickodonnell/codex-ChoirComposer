@@ -132,6 +132,19 @@
         <pre id="melodyMeta"></pre>
         <div id="melodyChords" class="chord-line"></div>
         <div id="melodySheet"></div>
+        <div class="preview-panel">
+          <div class="preview-panel-header">
+            <h3>Preview</h3>
+            <div class="actions">
+              <button id="refreshMelodyPreview">Refresh Preview</button>
+              <label>Zoom
+                <input id="melodyPreviewZoom" type="range" min="60" max="180" value="100" />
+              </label>
+            </div>
+          </div>
+          <div id="melodyPreviewStatus" class="preview-status">No preview generated yet.</div>
+          <div id="melodyPreview" class="preview-svg-wrap"></div>
+        </div>
         <div class="actions">
           <button id="startMelody">Start</button>
           <button id="pauseMelody">Pause</button>
@@ -158,6 +171,19 @@
         <pre id="satbMeta"></pre>
         <div id="satbChords" class="chord-line"></div>
         <div id="satbSheet"></div>
+        <div class="preview-panel">
+          <div class="preview-panel-header">
+            <h3>Preview</h3>
+            <div class="actions">
+              <button id="refreshSatbPreview">Refresh Preview</button>
+              <label>Zoom
+                <input id="satbPreviewZoom" type="range" min="60" max="180" value="100" />
+              </label>
+            </div>
+          </div>
+          <div id="satbPreviewStatus" class="preview-status">No preview generated yet.</div>
+          <div id="satbPreview" class="preview-svg-wrap"></div>
+        </div>
         <div class="actions">
           <button id="startSATB">Start</button>
           <button id="pauseSATB">Pause</button>

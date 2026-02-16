@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from dataclasses import dataclass
+from threading import Lock
+
+from app.logging_utils import log_event
+from app.models import CanonicalScore
+from app.services.musicxml_export import export_musicxml
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreviewArtifact:
+    page: int
+    svg: str
+
+
+@dataclass(frozen=True)
+class EngravingOptions:
+    include_all_pages: bool = False
+    scale: int = 42
+    page_width: int = 2100
+    page_height: int = 2970
+
+
+class EngravingPreviewService:
+    def __init__(self):
+        self._cache: dict[str, list[PreviewArtifact]] = {}
+        self._cache_lock = Lock()
+
+    def render_preview(self, score: CanonicalScore, options: EngravingOptions) -> tuple[list[PreviewArtifact], bool]:
+        cache_key = self._cache_key(score, options)
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+        if cached is not None:
+            log_event(logger, "engraving_preview_cache_hit", cache_key=cache_key, pages=len(cached))
+            return cached, True
+
+        musicxml = export_musicxml(score)
+        artifacts = self._render_svg_pages(musicxml, options)
+        with self._cache_lock:
+            self._cache[cache_key] = artifacts
+        log_event(logger, "engraving_preview_cache_store", cache_key=cache_key, pages=len(artifacts))
+        return artifacts, False
+
+    def _cache_key(self, score: CanonicalScore, options: EngravingOptions) -> str:
+        canonical_payload = {
+            "score": score.model_dump(mode="json"),
+            "options": {
+                "include_all_pages": options.include_all_pages,
+                "scale": options.scale,
+                "page_width": options.page_width,
+                "page_height": options.page_height,
+            },
+        }
+        digest = hashlib.sha256(json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        return f"engraving:v1:{digest}"
+
+    def _render_svg_pages(self, musicxml: str, options: EngravingOptions) -> list[PreviewArtifact]:
+        try:
+            import verovio  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depends on deployment image
+            raise RuntimeError("Verovio is required for server-side preview rendering.") from exc
+
+        toolkit = verovio.toolkit()
+        toolkit.setOptions({
+            "scale": options.scale,
+            "pageWidth": options.page_width,
+            "pageHeight": options.page_height,
+            "adjustPageHeight": True,
+            "breaks": "auto",
+            "footer": "none",
+            "header": "none",
+            "svgViewBox": True,
+        })
+        toolkit.loadData(musicxml)
+
+        page_count = max(1, int(toolkit.getPageCount()))
+        final_page_count = page_count if options.include_all_pages else 1
+
+        artifacts: list[PreviewArtifact] = []
+        for page in range(1, final_page_count + 1):
+            svg = _render_svg_page(toolkit, page)
+            artifacts.append(PreviewArtifact(page=page, svg=svg))
+
+        log_event(logger, "engraving_preview_rendered", pages=len(artifacts), total_pages=page_count)
+        return artifacts
+
+
+
+def _render_svg_page(toolkit, page: int) -> str:
+    try:
+        return toolkit.renderToSVG(page)
+    except TypeError:
+        return toolkit.renderToSVG(page, {})
+
+
+preview_service = EngravingPreviewService()

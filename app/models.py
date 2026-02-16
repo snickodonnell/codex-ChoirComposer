@@ -201,6 +201,24 @@ class PDFExportRequest(BaseModel):
     score: CanonicalScore
 
 
+class EngravingPreviewRequest(BaseModel):
+    score: CanonicalScore
+    preview_mode: Literal["melody", "satb"]
+    include_all_pages: bool = False
+    scale: int = Field(default=42, ge=20, le=90)
+
+
+class EngravingPreviewArtifact(BaseModel):
+    page: int = Field(ge=1)
+    svg: str = Field(min_length=1)
+
+
+class EngravingPreviewResponse(BaseModel):
+    preview_mode: Literal["melody", "satb"]
+    cache_hit: bool
+    artifacts: list[EngravingPreviewArtifact]
+
+
 class ClientLogEvent(BaseModel):
     ts: str
     event: str = Field(min_length=1, max_length=120)
@@ -211,4 +229,3 @@ class ClientLogEvent(BaseModel):
     totalSeconds: float | None = None
     events: int | None = None
     progressSeconds: float | None = None
-

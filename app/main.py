@@ -19,6 +19,9 @@ from app.logging_utils import (
 from app.models import (
     ClientLogEvent,
     CompositionRequest,
+    EngravingPreviewArtifact,
+    EngravingPreviewRequest,
+    EngravingPreviewResponse,
     EndScoreResponse,
     HarmonizeRequest,
     MelodyResponse,
@@ -28,6 +31,7 @@ from app.models import (
 )
 from app.services.composer import generate_melody_score, harmonize_score, refine_score
 from app.services.musicxml_export import export_musicxml
+from app.services.engraving_preview import EngravingOptions, preview_service
 from app.services.pdf_export import build_score_pdf
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score
@@ -281,3 +285,36 @@ def export_musicxml_endpoint(payload: PDFExportRequest):
         media_type="application/vnd.recordare.musicxml+xml",
         headers={"Content-Disposition": "attachment; filename=choir-score.musicxml"},
     )
+
+
+@app.post("/api/engrave/preview", response_model=EngravingPreviewResponse)
+def engrave_preview_endpoint(payload: EngravingPreviewRequest):
+    action = "Engraving preview"
+    try:
+        _require_score_stage(payload.score, payload.preview_mode, action)
+        _require_valid_score(payload.score, action)
+    except ValueError as exc:
+        raise _handle_user_error(action, exc) from exc
+
+    options = EngravingOptions(include_all_pages=payload.include_all_pages, scale=payload.scale)
+    log_event(
+        logger,
+        "engraving_preview_started",
+        preview_mode=payload.preview_mode,
+        include_all_pages=payload.include_all_pages,
+        scale=payload.scale,
+    )
+
+    try:
+        artifacts, cache_hit = preview_service.render_preview(normalize_score_for_rendering(payload.score), options)
+    except RuntimeError as exc:
+        log_event(logger, "engraving_preview_failed", level=logging.ERROR, reason=str(exc))
+        raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
+
+    response = EngravingPreviewResponse(
+        preview_mode=payload.preview_mode,
+        cache_hit=cache_hit,
+        artifacts=[EngravingPreviewArtifact(page=item.page, svg=item.svg) for item in artifacts],
+    )
+    log_event(logger, "engraving_preview_completed", preview_mode=payload.preview_mode, pages=len(response.artifacts), cache_hit=cache_hit)
+    return response
