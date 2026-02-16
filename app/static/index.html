@@ -54,10 +54,61 @@
           </label>
         </div>
         <div>
-          <label>Key (optional) <input id="key" placeholder="e.g. D or Am" /></label>
-          <label>Primary Mode (optional) <input id="primaryMode" placeholder="e.g. ionian, dorian, aeolian" /></label>
+          <label>Key (optional)
+            <select id="key">
+              <option value="">Auto</option>
+              <option value="C">C</option>
+              <option value="C#">C#</option>
+              <option value="Db">Db</option>
+              <option value="D">D</option>
+              <option value="D#">D#</option>
+              <option value="Eb">Eb</option>
+              <option value="E">E</option>
+              <option value="F">F</option>
+              <option value="F#">F#</option>
+              <option value="Gb">Gb</option>
+              <option value="G">G</option>
+              <option value="G#">G#</option>
+              <option value="Ab">Ab</option>
+              <option value="A">A</option>
+              <option value="A#">A#</option>
+              <option value="Bb">Bb</option>
+              <option value="B">B</option>
+              <option value="Cm">Cm</option>
+              <option value="C#m">C#m</option>
+              <option value="Dbm">Dbm</option>
+              <option value="Dm">Dm</option>
+              <option value="D#m">D#m</option>
+              <option value="Ebm">Ebm</option>
+              <option value="Em">Em</option>
+              <option value="Fm">Fm</option>
+              <option value="F#m">F#m</option>
+              <option value="Gbm">Gbm</option>
+              <option value="Gm">Gm</option>
+              <option value="G#m">G#m</option>
+              <option value="Abm">Abm</option>
+              <option value="Am">Am</option>
+              <option value="A#m">A#m</option>
+              <option value="Bbm">Bbm</option>
+              <option value="Bm">Bm</option>
+            </select>
+          </label>
+          <label>Primary Mode (optional)
+            <select id="primaryMode">
+              <option value="">Auto</option>
+              <option value="ionian">ionian</option>
+              <option value="dorian">dorian</option>
+              <option value="phrygian">phrygian</option>
+              <option value="lydian">lydian</option>
+              <option value="mixolydian">mixolydian</option>
+              <option value="aeolian">aeolian</option>
+              <option value="locrian">locrian</option>
+              <option value="major">major</option>
+              <option value="minor">minor</option>
+            </select>
+          </label>
           <label>Time Signature (optional) <input id="time" placeholder="e.g. 4/4" /></label>
-          <label>Tempo BPM (optional) <input id="tempo" type="number" min="40" max="240" /></label>
+          <label>Tempo BPM (optional) <input id="tempo" type="number" min="30" max="300" /></label>
         </div>
       </section>
 
@@ -81,16 +132,29 @@
         <pre id="melodyMeta"></pre>
         <div id="melodyChords" class="chord-line"></div>
         <div id="melodySheet"></div>
-        <button id="playMelody">Play Melody</button>
+        <div class="actions">
+          <button id="startMelody">Start</button>
+          <button id="pauseMelody">Pause</button>
+          <button id="stopMelody">Stop</button>
+        </div>
       </section>
 
       <section class="card">
         <h2>3) SATB Harmonization</h2>
         <button id="generateSATB">Generate SATB</button>
+        <div class="actions">
+          <label>Draft version
+            <select id="satbDraftVersionSelect"></select>
+          </label>
+        </div>
         <pre id="satbMeta"></pre>
         <div id="satbChords" class="chord-line"></div>
         <div id="satbSheet"></div>
-        <button id="playSATB">Play SATB</button>
+        <div class="actions">
+          <button id="startSATB">Start</button>
+          <button id="pauseSATB">Pause</button>
+          <button id="stopSATB">Stop</button>
+        </div>
       </section>
 
       <section class="card">
