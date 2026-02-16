@@ -120,3 +120,22 @@ def test_validation_failure_logs_event(caplog, monkeypatch):
 
     assert res.status_code == 422
     assert any(getattr(record, "event", "") == "validation_failed" for record in caplog.records)
+
+
+def test_client_log_endpoint_records_playback_events(caplog):
+    with caplog.at_level(logging.INFO):
+        res = client.post(
+            "/api/client-log",
+            json={
+                "ts": "2026-01-01T00:00:00.000Z",
+                "event": "playback_started",
+                "type": "satb",
+                "id": "satb:demo",
+                "events": 12,
+                "totalSeconds": 9.5,
+            },
+        )
+
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    assert any(getattr(record, "event", "") == "client_playback_event" for record in caplog.records)

@@ -39,6 +39,169 @@ let activeDraftVersionId = null;
 let satbDraftVersionsByMelodyVersion = new Map();
 let activeSatbDraftVersionId = null;
 let activePlayback = null;
+let playbackEventLog = [];
+if (typeof window !== 'undefined') {
+  window.playbackEventLog = playbackEventLog;
+}
+
+function emitPlaybackLog(event, fields = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    event,
+    ...fields,
+  };
+  playbackEventLog = [...playbackEventLog.slice(-199), entry];
+  if (typeof window !== 'undefined') {
+    window.playbackEventLog = playbackEventLog;
+  }
+  console.info('[playback]', entry);
+
+  fetch(apiUrl('/api/client-log'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entry),
+  }).catch(() => {
+    // Logging should never block playback behavior.
+  });
+}
+
+class MusicPlaybackEngine {
+  constructor() {
+    this.session = null;
+  }
+
+  _syncGlobalState() {
+    activePlayback = this.session ? {
+      id: this.session.id,
+      type: this.session.type,
+      state: this.session.state,
+      offsetSeconds: this.session.offsetSeconds,
+      totalSeconds: this.session.totalSeconds,
+    } : null;
+  }
+
+  _disposeSynth() {
+    if (!this.session?.synth) return;
+    this.session.synth.dispose();
+    this.session.synth = null;
+  }
+
+  _clearFinishTimer() {
+    if (!this.session?.finishTimer) return;
+    window.clearTimeout(this.session.finishTimer);
+    this.session.finishTimer = null;
+  }
+
+  _scheduleFromOffset(playback, offsetSeconds) {
+    const now = Tone.now();
+    const synth = playback.poly ? new Tone.PolySynth(Tone.Synth).toDestination() : new Tone.Synth().toDestination();
+
+    playback.events.forEach((event) => {
+      const eventEnd = event.time + event.seconds;
+      if (eventEnd <= offsetSeconds) return;
+      const secondsIntoEvent = Math.max(0, offsetSeconds - event.time);
+      const startDelay = Math.max(0, event.time - offsetSeconds);
+      const duration = Math.max(0.02, event.seconds - secondsIntoEvent);
+      if (playback.poly) {
+        synth.triggerAttackRelease(event.pitches, duration, now + startDelay);
+        return;
+      }
+      synth.triggerAttackRelease(event.pitches[0], duration, now + startDelay);
+    });
+
+    const remainingMs = Math.max(0, (playback.totalSeconds - offsetSeconds + 0.05) * 1000);
+    this.session = {
+      id: playback.id,
+      type: playback.type,
+      poly: playback.poly,
+      events: playback.events,
+      totalSeconds: playback.totalSeconds,
+      offsetSeconds,
+      startedAt: now,
+      state: 'playing',
+      synth,
+      finishTimer: window.setTimeout(() => {
+        if (this.session?.id === playback.id) {
+          this.stop(playback.type, 'completed');
+        }
+      }, remainingMs),
+    };
+    this._syncGlobalState();
+  }
+
+  async start(playback) {
+    await Tone.start();
+
+    if (!playback.events.length || playback.totalSeconds <= 0) {
+      emitPlaybackLog('playback_start_rejected_empty', { type: playback.type, id: playback.id });
+      return;
+    }
+
+    if (this.session?.id === playback.id && this.session.state === 'playing') {
+      emitPlaybackLog('playback_start_ignored_already_playing', { type: playback.type, id: playback.id });
+      return;
+    }
+
+    if (this.session && this.session.id !== playback.id) {
+      this.stop(this.session.type, 'interrupted_by_new_playback');
+    }
+
+    if (this.session?.id === playback.id && this.session.state === 'paused') {
+      const resumeAt = this.session.offsetSeconds;
+      this._disposeSynth();
+      this._clearFinishTimer();
+      this._scheduleFromOffset(playback, resumeAt);
+      emitPlaybackLog('playback_resumed', { type: playback.type, id: playback.id, offsetSeconds: Number(resumeAt.toFixed(3)) });
+      return;
+    }
+
+    this.stop(playback.type, 'restart');
+    this._scheduleFromOffset(playback, 0);
+    emitPlaybackLog('playback_started', {
+      type: playback.type,
+      id: playback.id,
+      events: playback.events.length,
+      totalSeconds: Number(playback.totalSeconds.toFixed(3)),
+    });
+  }
+
+  pause(type) {
+    if (!this.session || this.session.type !== type || this.session.state !== 'playing') return;
+    const elapsed = this.session.offsetSeconds + (Tone.now() - this.session.startedAt);
+    this.session.offsetSeconds = Math.min(elapsed, this.session.totalSeconds);
+    this.session.state = 'paused';
+    this._disposeSynth();
+    this._clearFinishTimer();
+    this._syncGlobalState();
+    emitPlaybackLog('playback_paused', {
+      type,
+      id: this.session.id,
+      offsetSeconds: Number(this.session.offsetSeconds.toFixed(3)),
+    });
+  }
+
+  stop(type, reason = 'user_stop') {
+    if (!this.session || this.session.type !== type) return;
+    const { id, offsetSeconds, totalSeconds } = this.session;
+    this._disposeSynth();
+    this._clearFinishTimer();
+    this.session = null;
+    this._syncGlobalState();
+    emitPlaybackLog('playback_stopped', {
+      type,
+      id,
+      reason,
+      progressSeconds: Number(Math.min(offsetSeconds, totalSeconds).toFixed(3)),
+    });
+  }
+
+  stopAny(reason = 'reset') {
+    if (!this.session) return;
+    this.stop(this.session.type, reason);
+  }
+}
+
+const playbackEngine = new MusicPlaybackEngine();
 
 function resolveApiBaseUrl() {
   if (window.location.protocol === 'file:') {
@@ -323,70 +486,19 @@ function fingerprintNotes(events) {
 }
 
 function stopActivePlayback() {
-  if (!activePlayback) return;
-  if (activePlayback.finishEventId != null) {
-    Tone.Transport.clear(activePlayback.finishEventId);
-  }
-  activePlayback.part.dispose();
-  activePlayback.synth.dispose();
-  Tone.Transport.stop();
-  Tone.Transport.cancel(0);
-  activePlayback = null;
+  playbackEngine.stopAny('manual_stop_active');
 }
 
 async function startPlayback(playback) {
-  await Tone.start();
-  if (activePlayback) {
-    if (activePlayback.id === playback.id && activePlayback.state === 'playing') {
-      return;
-    }
-    if (activePlayback.id !== playback.id) {
-      stopActivePlayback();
-    }
-  }
-
-  if (activePlayback && activePlayback.id === playback.id && activePlayback.state === 'paused') {
-    Tone.Transport.start();
-    activePlayback.state = 'playing';
-    return;
-  }
-
-  Tone.Transport.stop();
-  Tone.Transport.cancel(0);
-  const synth = playback.poly ? new Tone.PolySynth(Tone.Synth).toDestination() : new Tone.Synth().toDestination();
-  const part = new Tone.Part((time, event) => {
-    if (playback.poly) {
-      synth.triggerAttackRelease(event.pitches, event.seconds, time);
-      return;
-    }
-    synth.triggerAttackRelease(event.pitches[0], event.seconds, time);
-  }, playback.events.map((event) => [event.time, event])).start(0);
-
-  const finishEventId = Tone.Transport.scheduleOnce(() => {
-    if (activePlayback?.id === playback.id) {
-      stopActivePlayback();
-    }
-  }, playback.totalSeconds + 0.1);
-
-  activePlayback = {
-    ...playback,
-    synth,
-    part,
-    finishEventId,
-    state: 'playing',
-  };
-  Tone.Transport.start();
+  await playbackEngine.start(playback);
 }
 
 function pausePlayback(type) {
-  if (!activePlayback || activePlayback.type !== type || activePlayback.state !== 'playing') return;
-  Tone.Transport.pause();
-  activePlayback.state = 'paused';
+  playbackEngine.pause(type);
 }
 
 function stopPlayback(type) {
-  if (!activePlayback || activePlayback.type !== type) return;
-  stopActivePlayback();
+  playbackEngine.stop(type);
 }
 
 async function refineActiveMelody({ regenerate }) {

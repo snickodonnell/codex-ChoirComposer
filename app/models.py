@@ -199,3 +199,16 @@ class HarmonizeRequest(BaseModel):
 
 class PDFExportRequest(BaseModel):
     score: CanonicalScore
+
+
+class ClientLogEvent(BaseModel):
+    ts: str
+    event: str = Field(min_length=1, max_length=120)
+    type: str | None = Field(default=None, min_length=1, max_length=40)
+    id: str | None = Field(default=None, min_length=1, max_length=240)
+    reason: str | None = Field(default=None, min_length=1, max_length=120)
+    offsetSeconds: float | None = None
+    totalSeconds: float | None = None
+    events: int | None = None
+    progressSeconds: float | None = None
+
