@@ -130,6 +130,8 @@ def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
 
         if note.lyric_mode in {"melisma_continue", "tie_continue"} and note.lyric_syllable_id is None:
             errors.append(f"Note {note_idx} has continuation mode without syllable id.")
+        if note.lyric_mode in {"melisma_continue", "tie_continue"} and note.lyric:
+            errors.append(f"Note {note_idx} repeats lyric text on a continuation mode.")
 
     for section in score.sections:
         missing = expected_ids[section.id] - mapped_ids[section.id]
