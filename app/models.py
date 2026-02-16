@@ -45,6 +45,7 @@ class PhraseBlock(BaseModel):
     text: str = Field(min_length=1)
     must_end_at_barline: bool = True
     breath_after_phrase: bool = False
+    merge_with_next_phrase: bool = False
 
 
 class CompositionPreferences(BaseModel):

@@ -95,15 +95,15 @@ def test_rhythm_plan_never_places_next_line_inside_prior_line_measure():
 
 
 
-def test_phrase_blocks_can_skip_barline_alignment_when_toggled_off():
+def test_phrase_blocks_can_merge_with_next_phrase_to_form_run_on_phrase():
     req = CompositionRequest(
         sections=[LyricSection(id="verse-1", label="verse", text="glory rises\nforever amen")],
         arrangement=[
             ArrangementItem(
                 section_id="verse-1",
                 phrase_blocks=[
-                    PhraseBlock(text="glory rises", must_end_at_barline=False),
-                    PhraseBlock(text="forever amen", must_end_at_barline=True),
+                    PhraseBlock(text="glory rises", merge_with_next_phrase=True),
+                    PhraseBlock(text="forever amen"),
                 ],
             )
         ],
@@ -114,32 +114,25 @@ def test_phrase_blocks_can_skip_barline_alignment_when_toggled_off():
     first_section = melody.sections[0]
     phrase_end_syllables = [s for s in first_section.syllables if s.phrase_end_after]
 
-    assert len(phrase_end_syllables) >= 2
+    assert len(phrase_end_syllables) == 1
+    assert phrase_end_syllables[0].word_text.lower() == "amen"
 
     soprano = [n for m in melody.measures for n in m.voices["soprano"]]
     beat_pos = 0.0
-    beat_at_phrase_end: dict[str, float] = {}
     last_note_index_for_syllable = {}
     for idx, note in enumerate(soprano):
         if note.lyric_syllable_id:
             last_note_index_for_syllable[note.lyric_syllable_id] = idx
 
+    phrase_end_beat = 0.0
     for idx, note in enumerate(soprano):
         beat_pos += note.beats
         syllable_id = note.lyric_syllable_id
-        if not syllable_id:
-            continue
-        if last_note_index_for_syllable.get(syllable_id) != idx:
-            continue
-        phrase_syllable = next((s for s in phrase_end_syllables if s.id == syllable_id), None)
-        if phrase_syllable:
-            beat_at_phrase_end[syllable_id] = beat_pos
+        if syllable_id == phrase_end_syllables[0].id and last_note_index_for_syllable.get(syllable_id) == idx:
+            phrase_end_beat = beat_pos
+            break
 
-    assert phrase_end_syllables[0].must_end_at_barline is False
-    assert abs(beat_at_phrase_end[phrase_end_syllables[0].id] % 4) > 1e-9
-    assert phrase_end_syllables[1].must_end_at_barline is True
-    assert abs(beat_at_phrase_end[phrase_end_syllables[1].id] % 4) < 1e-9
-
+    assert abs(phrase_end_beat % 4) < 1e-9
 
 
 def test_phrase_blocks_with_breath_marker_enforce_phrase_boundary_and_keep_timing():
@@ -149,8 +142,8 @@ def test_phrase_blocks_with_breath_marker_enforce_phrase_boundary_and_keep_timin
             ArrangementItem(
                 section_id="verse-1",
                 phrase_blocks=[
-                    PhraseBlock(text="holy holy", must_end_at_barline=False, breath_after_phrase=True),
-                    PhraseBlock(text="forever amen", must_end_at_barline=False, breath_after_phrase=False),
+                    PhraseBlock(text="holy holy", breath_after_phrase=True),
+                    PhraseBlock(text="forever amen", breath_after_phrase=False),
                 ],
             )
         ],
@@ -162,8 +155,8 @@ def test_phrase_blocks_with_breath_marker_enforce_phrase_boundary_and_keep_timin
             ArrangementItem(
                 section_id="verse-1",
                 phrase_blocks=[
-                    PhraseBlock(text="holy holy", must_end_at_barline=False, breath_after_phrase=False),
-                    PhraseBlock(text="forever amen", must_end_at_barline=False, breath_after_phrase=False),
+                    PhraseBlock(text="holy holy", breath_after_phrase=False),
+                    PhraseBlock(text="forever amen", breath_after_phrase=False),
                 ],
             )
         ],
