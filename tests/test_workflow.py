@@ -62,3 +62,34 @@ def test_refine_endpoint_accepts_cluster_regenerate_payload():
 
     assert res.status_code == 200
     assert res.json()["score"]["meta"]["stage"] == "melody"
+
+
+def test_refine_satb_endpoint_accepts_cluster_regenerate_payload():
+    melody = generate_melody_score(_sample_request())
+    satb = harmonize_score(melody)
+
+    res = client.post(
+        "/api/refine-satb",
+        json={
+            "score": satb.model_dump(),
+            "instruction": "fresh harmonic voicing",
+            "regenerate": True,
+            "selected_clusters": ["verse"],
+            "section_clusters": {"sec-1": "verse"},
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.json()["score"]["meta"]["stage"] == "satb"
+
+
+def test_refine_satb_rejects_melody_input_stage():
+    melody = generate_melody_score(_sample_request())
+
+    res = client.post(
+        "/api/refine-satb",
+        json={"score": melody.model_dump(), "instruction": "smooth inner voices", "regenerate": False},
+    )
+
+    assert res.status_code == 422
+    assert "requires a satb score" in res.json()["detail"]
