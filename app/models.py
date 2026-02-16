@@ -44,6 +44,7 @@ class ArrangementItem(BaseModel):
 class PhraseBlock(BaseModel):
     text: str = Field(min_length=1)
     must_end_at_barline: bool = True
+    breath_after_phrase: bool = False
 
 
 class CompositionPreferences(BaseModel):
@@ -126,6 +127,7 @@ class ScoreSyllable(BaseModel):
     stressed: bool = False
     phrase_end_after: bool = False
     must_end_at_barline: bool = True
+    breath_after_phrase: bool = False
 
 
 class ScoreSection(BaseModel):

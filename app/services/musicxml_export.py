@@ -35,6 +35,7 @@ def export_musicxml(score: CanonicalScore) -> str:
     fifths, mode = _key_signature(score.meta.key)
     measure_duration = beats_i * divisions
     chords = {c.measure_number: c for c in score.chord_progression}
+    breath_mark_positions = _collect_breath_mark_positions(score)
 
     lines: list[str] = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
@@ -72,13 +73,13 @@ def export_musicxml(score: CanonicalScore) -> str:
         if measure.number in chords:
             lines.extend(_harmony_xml(chords[measure.number]))
 
-        lines.extend(_voice_measure_xml(score, measure.number, "soprano", 1, 1, divisions))
+        lines.extend(_voice_measure_xml(score, measure.number, "soprano", 1, 1, divisions, breath_mark_positions))
         lines.extend(_backup_xml(measure_duration))
-        lines.extend(_voice_measure_xml(score, measure.number, "alto", 2, 1, divisions))
+        lines.extend(_voice_measure_xml(score, measure.number, "alto", 2, 1, divisions, set()))
         lines.extend(_backup_xml(measure_duration))
-        lines.extend(_voice_measure_xml(score, measure.number, "tenor", 3, 2, divisions))
+        lines.extend(_voice_measure_xml(score, measure.number, "tenor", 3, 2, divisions, set()))
         lines.extend(_backup_xml(measure_duration))
-        lines.extend(_voice_measure_xml(score, measure.number, "bass", 4, 2, divisions))
+        lines.extend(_voice_measure_xml(score, measure.number, "bass", 4, 2, divisions, set()))
 
         lines.append("    </measure>")
 
@@ -95,13 +96,21 @@ def export_musicxml(score: CanonicalScore) -> str:
     return content
 
 
-def _voice_measure_xml(score: CanonicalScore, measure_number: int, voice_name: str, voice_number: int, staff_number: int, divisions: int) -> list[str]:
+def _voice_measure_xml(
+    score: CanonicalScore,
+    measure_number: int,
+    voice_name: str,
+    voice_number: int,
+    staff_number: int,
+    divisions: int,
+    breath_mark_positions: set[tuple[int, int]],
+) -> list[str]:
     measure = next((m for m in score.measures if m.number == measure_number), None)
     if not measure:
         return []
 
     lines: list[str] = []
-    for note in measure.voices[voice_name]:
+    for note_index, note in enumerate(measure.voices[voice_name]):
         duration = max(1, int(round(note.beats * divisions)))
         note_type, dotted = _note_type_from_duration(note.beats)
 
@@ -132,9 +141,39 @@ def _voice_measure_xml(score: CanonicalScore, measure_number: int, voice_name: s
             lines.append(f"          <text>{_escape_xml(note.lyric)}</text>")
             lines.append("        </lyric>")
 
+        if (measure_number, note_index) in breath_mark_positions:
+            lines.extend(
+                [
+                    "        <notations>",
+                    "          <articulations>",
+                    "            <breath-mark/>",
+                    "          </articulations>",
+                    "        </notations>",
+                ]
+            )
+
         lines.append("      </note>")
     return lines
 
+
+
+def _collect_breath_mark_positions(score: CanonicalScore) -> set[tuple[int, int]]:
+    breath_end_syllable_ids = {
+        syllable.id
+        for section in score.sections
+        for syllable in section.syllables
+        if syllable.breath_after_phrase
+    }
+    if not breath_end_syllable_ids:
+        return set()
+
+    last_note_position_by_syllable: dict[str, tuple[int, int]] = {}
+    for measure in score.measures:
+        for note_index, note in enumerate(measure.voices["soprano"]):
+            if note.lyric_syllable_id in breath_end_syllable_ids:
+                last_note_position_by_syllable[note.lyric_syllable_id] = (measure.number, note_index)
+
+    return set(last_note_position_by_syllable.values())
 
 def _harmony_xml(chord) -> list[str]:
     symbol = chord.symbol or "C"

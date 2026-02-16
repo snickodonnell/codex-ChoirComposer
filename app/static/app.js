@@ -700,9 +700,9 @@ function derivePhraseBlocksFromText(text) {
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => ({ text: line, must_end_at_barline: true }));
+    .map((line) => ({ text: line, must_end_at_barline: true, breath_after_phrase: false }));
   if (!blocks.length && (text || '').trim()) {
-    blocks.push({ text: text.trim(), must_end_at_barline: true });
+    blocks.push({ text: text.trim(), must_end_at_barline: true, breath_after_phrase: false });
   }
   return blocks;
 }
@@ -717,6 +717,10 @@ function renderPhraseBlocksEditor(item, phraseBlocks) {
         <input type="checkbox" class="arrangement-phrase-end-toggle" ${block.must_end_at_barline ? 'checked' : ''} />
         must end at barline
       </label>
+      <label class="phrase-block-toggle">
+        <input type="checkbox" class="arrangement-breath-after-toggle" ${block.breath_after_phrase ? 'checked' : ''} />
+        breath after phrase
+      </label>
     </div>
   `).join('');
 }
@@ -726,6 +730,7 @@ function getArrangementItemPhraseBlocks(item) {
     .map((row) => ({
       text: row.querySelector('.phrase-block-text')?.value || '',
       must_end_at_barline: row.querySelector('.arrangement-phrase-end-toggle')?.checked ?? true,
+      breath_after_phrase: row.querySelector('.arrangement-breath-after-toggle')?.checked ?? false,
     }))
     .filter((block) => block.text.trim().length > 0);
 }

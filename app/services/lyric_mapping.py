@@ -74,12 +74,12 @@ def split_word_into_syllables(word: str) -> list[str]:
 
 def tokenize_section_lyrics(section_id: str, text: str) -> list[ScoreSyllable]:
     phrase_blocks = [
-        PhraseBlock(text=line.strip(), must_end_at_barline=True)
+        PhraseBlock(text=line.strip(), must_end_at_barline=True, breath_after_phrase=False)
         for line in text.splitlines()
         if line.strip()
     ]
     if not phrase_blocks:
-        phrase_blocks = [PhraseBlock(text=text, must_end_at_barline=True)]
+        phrase_blocks = [PhraseBlock(text=text, must_end_at_barline=True, breath_after_phrase=False)]
     return tokenize_phrase_blocks(section_id, phrase_blocks)
 
 
@@ -127,6 +127,7 @@ def _tokenize_phrase_blocks_internal(section_id: str, phrase_blocks: list[Phrase
                             stressed=_is_stressed(syl, si, len(sylls)),
                             phrase_end_after=False,
                             must_end_at_barline=block.must_end_at_barline,
+                            breath_after_phrase=False,
                         )
                     )
                     last_syllable_index_in_block = len(out) - 1
@@ -137,6 +138,9 @@ def _tokenize_phrase_blocks_internal(section_id: str, phrase_blocks: list[Phrase
 
         if last_syllable_index_in_block is not None and block_index < total_blocks - 1:
             out[last_syllable_index_in_block].phrase_end_after = True
+        if last_syllable_index_in_block is not None and block.breath_after_phrase:
+            out[last_syllable_index_in_block].phrase_end_after = True
+            out[last_syllable_index_in_block].breath_after_phrase = True
 
     return out
 
