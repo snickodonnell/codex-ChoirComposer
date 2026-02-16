@@ -143,6 +143,14 @@
         <h2>3) SATB Harmonization</h2>
         <button id="generateSATB">Generate SATB</button>
         <div class="actions">
+          <input id="satbInstruction" placeholder="e.g. make inner voices smoother" />
+          <button id="refineSATB">Refine</button>
+          <button id="regenerateSATB">Regenerate</button>
+        </div>
+        <div class="actions">
+          <label>Regenerate clusters
+            <select id="satbRegenerateClusters" multiple></select>
+          </label>
           <label>Draft version
             <select id="satbDraftVersionSelect"></select>
           </label>

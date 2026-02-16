@@ -34,6 +34,17 @@ def _require_valid_score(score, action: str) -> None:
         raise ValueError(f"{action} requires a valid input score. Resolve validation errors before continuing.")
 
 
+def _extract_melody_from_satb(score):
+    melody = score.model_copy(deep=True)
+    melody.meta = melody.meta.model_copy(update={"stage": "melody"})
+    for measure in melody.measures:
+        soprano_voice = [note.model_copy(deep=True) for note in measure.voices["soprano"]]
+        measure.voices["alto"] = [note.model_copy(update={"pitch": "REST", "is_rest": True}) for note in soprano_voice]
+        measure.voices["tenor"] = [note.model_copy(update={"pitch": "REST", "is_rest": True}) for note in soprano_voice]
+        measure.voices["bass"] = [note.model_copy(update={"pitch": "REST", "is_rest": True}) for note in soprano_voice]
+    return melody
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse("app/static/index.html")
@@ -72,6 +83,25 @@ def generate_satb_endpoint(payload: HarmonizeRequest):
         _require_valid_score(payload.score, "SATB generation")
         score = normalize_score_for_rendering(harmonize_score(payload.score))
         return SATBResponse(score=score, harmonization_notes="Chord-led SATB voicing with diatonic progression integrity checks.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/refine-satb", response_model=SATBResponse)
+def refine_satb_endpoint(payload: RefineRequest):
+    try:
+        _require_score_stage(payload.score, "satb", "SATB refinement")
+        _require_valid_score(payload.score, "SATB refinement")
+        melody_projection = _extract_melody_from_satb(payload.score)
+        refined_melody = refine_score(
+            melody_projection,
+            payload.instruction,
+            payload.regenerate,
+            payload.selected_clusters,
+            payload.section_clusters,
+        )
+        score = normalize_score_for_rendering(harmonize_score(refined_melody))
+        return SATBResponse(score=score, harmonization_notes="Refined SATB while preserving progression authority.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

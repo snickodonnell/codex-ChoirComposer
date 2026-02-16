@@ -11,6 +11,7 @@ const workflowStageHintEl = document.getElementById('workflowStageHint');
 const regenerateClustersEl = document.getElementById('regenerateClusters');
 const draftVersionSelectEl = document.getElementById('draftVersionSelect');
 const satbDraftVersionSelectEl = document.getElementById('satbDraftVersionSelect');
+const satbRegenerateClustersEl = document.getElementById('satbRegenerateClusters');
 
 const generateMelodyBtn = document.getElementById('generateMelody');
 const refineBtn = document.getElementById('refine');
@@ -19,6 +20,8 @@ const startMelodyBtn = document.getElementById('startMelody');
 const pauseMelodyBtn = document.getElementById('pauseMelody');
 const stopMelodyBtn = document.getElementById('stopMelody');
 const generateSATBBtn = document.getElementById('generateSATB');
+const refineSatbBtn = document.getElementById('refineSATB');
+const regenerateSatbBtn = document.getElementById('regenerateSATB');
 const startSATBBtn = document.getElementById('startSATB');
 const pauseSATBBtn = document.getElementById('pauseSATB');
 const stopSATBBtn = document.getElementById('stopSATB');
@@ -171,14 +174,18 @@ function getArrangementClusters() {
 }
 
 function refreshRegenerateClusterOptions() {
-  const previousOptions = [...regenerateClustersEl.options].map((o) => o.value);
-  const selected = new Set([...regenerateClustersEl.selectedOptions].map((o) => o.value));
   const clusters = getArrangementClusters();
-  const shouldDefaultSelectAll = selected.size === 0 || (previousOptions.length > 0 && selected.size === previousOptions.length);
+  const selects = [regenerateClustersEl, satbRegenerateClustersEl].filter(Boolean);
 
-  regenerateClustersEl.innerHTML = clusters.map((cluster) => `<option value="${cluster}">${cluster}</option>`).join('');
-  [...regenerateClustersEl.options].forEach((option) => {
-    option.selected = shouldDefaultSelectAll ? true : selected.has(option.value);
+  selects.forEach((selectEl) => {
+    const previousOptions = [...selectEl.options].map((o) => o.value);
+    const selected = new Set([...selectEl.selectedOptions].map((o) => o.value));
+    const shouldDefaultSelectAll = selected.size === 0 || (previousOptions.length > 0 && selected.size === previousOptions.length);
+
+    selectEl.innerHTML = clusters.map((cluster) => `<option value="${cluster}">${cluster}</option>`).join('');
+    [...selectEl.options].forEach((option) => {
+      option.selected = shouldDefaultSelectAll ? true : selected.has(option.value);
+    });
   });
 }
 
@@ -306,6 +313,7 @@ function appendSatbDraftVersion(score, harmonizationNotes, label, melodyVersionI
     : satbDraftVersions;
   satbDraftVersionsByMelodyVersion.set(melodyVersionId, capped);
   activeSatbDraftVersionId = version.id;
+  stopPlayback('satb');
   safeRenderSatb(score, harmonizationNotes, label);
   updateSatbDraftVersionOptions();
 }
@@ -381,9 +389,71 @@ function stopPlayback(type) {
   stopActivePlayback();
 }
 
+async function refineActiveMelody({ regenerate }) {
+  if (!melodyScore) {
+    showErrors([`Generate a melody before ${regenerate ? 'regenerating' : 'refining'}.`]);
+    return;
+  }
+  const instruction = document.getElementById('instruction').value || (regenerate ? 'fresh melodic idea' : 'smooth out leaps');
+  const melodyVersionId = activeMelodyVersionId();
+  const currentVersion = activeDraftVersion();
+  const payload = {
+    score: melodyScore,
+    instruction,
+    regenerate,
+  };
+
+  if (regenerate) {
+    payload.selected_clusters = [...regenerateClustersEl.selectedOptions].map((o) => o.value);
+    payload.section_clusters = currentVersion?.sectionClusterMap || {};
+  }
+
+  const res = await post('/api/refine-melody', payload);
+  const score = (await res.json()).score;
+  if (regenerate) {
+    appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
+  } else {
+    upsertActiveVersion(score, 'Melody (refined)');
+    if (melodyVersionId) {
+      satbDraftVersionsByMelodyVersion.delete(melodyVersionId);
+    }
+  }
+  resetSatbStage();
+  updateActionAvailability();
+}
+
+async function refineActiveSatb({ regenerate }) {
+  if (!satbScore) {
+    showErrors([`Generate SATB before ${regenerate ? 'regenerating' : 'refining'}.`]);
+    return;
+  }
+  const instructionEl = document.getElementById('satbInstruction');
+  const instruction = instructionEl?.value || (regenerate ? 'fresh melodic idea' : 'smooth out leaps');
+  const currentVersion = activeDraftVersion();
+  const payload = {
+    score: satbScore,
+    instruction,
+    regenerate,
+  };
+  if (regenerate) {
+    payload.selected_clusters = [...satbRegenerateClustersEl.selectedOptions].map((o) => o.value);
+    payload.section_clusters = currentVersion?.sectionClusterMap || {};
+  }
+
+  const res = await post('/api/refine-satb', payload);
+  const responsePayload = await res.json();
+  appendSatbDraftVersion(
+    responsePayload.score,
+    responsePayload.harmonization_notes,
+    regenerate ? 'SATB (regenerated)' : 'SATB (refined)',
+  );
+  updateActionAvailability();
+}
+
 function upsertActiveVersion(score, label) {
   const current = activeDraftVersion();
   if (!current) return;
+  stopPlayback('melody');
   current.score = score;
   current.label = label;
   safeRenderMelody(score, label);
@@ -402,6 +472,7 @@ function appendDraftVersion(score, sectionClusterMap, label) {
     melodyDraftVersions = melodyDraftVersions.slice(melodyDraftVersions.length - MAX_DRAFT_VERSIONS);
   }
   activeDraftVersionId = version.id;
+  stopPlayback('melody');
   safeRenderMelody(score, label);
   updateDraftVersionOptions();
 }
@@ -965,6 +1036,8 @@ function updateActionAvailability() {
   setButtonEnabled(pauseMelodyBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(stopMelodyBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(generateSATBBtn, hasMelody, 'Generate a melody first.');
+  setButtonEnabled(refineSatbBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(regenerateSatbBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(startSATBBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(pauseSATBBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(stopSATBBtn, hasSatb, 'Generate SATB first.');
@@ -1042,49 +1115,16 @@ generateMelodyBtn.onclick = async () => {
   updateActionAvailability();
 };
 
-refineBtn.onclick = async () => {
-  if (!melodyScore) {
-    showErrors(['Generate a melody before refining.']);
-    return;
-  }
-  const instruction = document.getElementById('instruction').value || 'smooth out leaps';
-  const melodyVersionId = activeMelodyVersionId();
-  const res = await post('/api/refine-melody', { score: melodyScore, instruction, regenerate: false });
-  const score = (await res.json()).score;
-  upsertActiveVersion(score, 'Melody (refined)');
-  if (melodyVersionId) {
-    satbDraftVersionsByMelodyVersion.delete(melodyVersionId);
-  }
-  resetSatbStage();
-  updateActionAvailability();
-};
+refineBtn.onclick = async () => refineActiveMelody({ regenerate: false });
 
-regenerateBtn.onclick = async () => {
-  if (!melodyScore) {
-    showErrors(['Generate a melody before regenerating.']);
-    return;
-  }
-  const instruction = document.getElementById('instruction').value || 'fresh melodic idea';
-  const selectedClusters = [...regenerateClustersEl.selectedOptions].map((o) => o.value);
-  const currentVersion = activeDraftVersion();
-  const res = await post('/api/refine-melody', {
-    score: melodyScore,
-    instruction,
-    regenerate: true,
-    selected_clusters: selectedClusters,
-    section_clusters: currentVersion?.sectionClusterMap || {},
-  });
-  const score = (await res.json()).score;
-  appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
-  resetSatbStage();
-  updateActionAvailability();
-};
+regenerateBtn.onclick = async () => refineActiveMelody({ regenerate: true });
 
 draftVersionSelectEl.onchange = () => {
   const selectedId = draftVersionSelectEl.value;
   const version = melodyDraftVersions.find((item) => item.id === selectedId);
   if (!version) return;
   activeDraftVersionId = version.id;
+  stopPlayback('melody');
   safeRenderMelody(version.score, version.label);
   syncSatbStageForActiveMelody();
 };
@@ -1105,7 +1145,7 @@ startMelodyBtn.onclick = async () => {
     return current;
   });
   await startPlayback({
-    id: `melody:${fingerprintNotes(events)}:${melodyScore.meta.tempo_bpm}`,
+    id: `melody:${activeDraftVersionId || 'current'}:${fingerprintNotes(events)}:${melodyScore.meta.tempo_bpm}`,
     type: 'melody',
     poly: false,
     events: timedEvents,
@@ -1127,11 +1167,15 @@ generateSATBBtn.onclick = async () => {
   updateActionAvailability();
 };
 
+refineSatbBtn.onclick = async () => refineActiveSatb({ regenerate: false });
+regenerateSatbBtn.onclick = async () => refineActiveSatb({ regenerate: true });
+
 satbDraftVersionSelectEl.onchange = () => {
   const selectedId = satbDraftVersionSelectEl.value;
   const version = activeSatbDraftVersions().find((item) => item.id === selectedId);
   if (!version) return;
   activeSatbDraftVersionId = version.id;
+  stopPlayback('satb');
   safeRenderSatb(version.score, version.harmonizationNotes, version.label);
   updateActionAvailability();
 };
@@ -1156,7 +1200,7 @@ startSATBBtn.onclick = async () => {
     return current;
   });
   await startPlayback({
-    id: `satb:${fingerprintNotes(chordEvents)}:${satbScore.meta.tempo_bpm}`,
+    id: `satb:${activeSatbDraftVersionId || 'current'}:${fingerprintNotes(chordEvents)}:${satbScore.meta.tempo_bpm}`,
     type: 'satb',
     poly: true,
     events: timedEvents,
