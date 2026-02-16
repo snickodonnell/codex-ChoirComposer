@@ -56,6 +56,43 @@ def test_preset_controls_melisma_amount():
     assert melisma_count(mel_plan) >= melisma_count(syll_plan)
 
 
+def test_rhythm_plan_aligns_line_endings_to_barlines():
+    syllables = tokenize_section_lyrics("sec-1", "glory rises\nforever amen")
+    cfg = config_for_preset("mixed", "verse")
+    plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-1")
+
+    by_id = {s.id: s for s in syllables}
+    beat_pos = 0.0
+    phrase_end_positions = []
+    for item in plan:
+        beat_pos += sum(item["durations"])
+        if by_id[item["syllable_id"]].phrase_end_after:
+            phrase_end_positions.append(beat_pos)
+
+    assert phrase_end_positions
+    assert all(abs(pos % 4) < 1e-9 for pos in phrase_end_positions)
+
+
+def test_rhythm_plan_never_places_next_line_inside_prior_line_measure():
+    syllables = tokenize_section_lyrics("sec-1", "kyrie eleison\nchrist have mercy")
+    cfg = config_for_preset("mixed", "verse")
+    plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-2")
+
+    by_id = {s.id: s for s in syllables}
+    beat_pos = 0.0
+    next_line_started = False
+    for item in plan:
+        syllable = by_id[item["syllable_id"]]
+        if next_line_started:
+            assert abs(beat_pos % 4) < 1e-9
+            break
+        beat_pos += sum(item["durations"])
+        if syllable.phrase_end_after:
+            next_line_started = True
+
+    assert next_line_started
+
+
 def test_generate_melody_and_satb_validate():
     req = CompositionRequest(
         sections=[LyricSection(label="verse", text="Glory rises in the dawn.")],
