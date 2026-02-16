@@ -93,6 +93,39 @@ def test_rhythm_plan_never_places_next_line_inside_prior_line_measure():
     assert next_line_started
 
 
+def test_continuation_notes_do_not_repeat_lyric_text():
+    req = CompositionRequest(
+        sections=[LyricSection(label="chorus", text="Gloria in excelsis deo")],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="melismatic"),
+    )
+    melody = generate_melody_score(req)
+
+    soprano = [n for m in melody.measures for n in m.voices["soprano"] if not n.is_rest]
+    continuation = [n for n in soprano if n.lyric_mode in {"melisma_continue", "tie_continue"}]
+
+    assert continuation
+    assert all(n.lyric is None for n in continuation)
+
+
+def test_each_syllable_text_is_emitted_once_per_syllable_id():
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="Kyrie eleison forever")],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed"),
+    )
+    melody = generate_melody_score(req)
+
+    seen_text_by_syllable_id = {}
+    for note in [n for m in melody.measures for n in m.voices["soprano"] if not n.is_rest]:
+        if note.lyric_syllable_id is None:
+            continue
+        if note.lyric:
+            seen_text_by_syllable_id.setdefault(note.lyric_syllable_id, 0)
+            seen_text_by_syllable_id[note.lyric_syllable_id] += 1
+
+    assert seen_text_by_syllable_id
+    assert all(count == 1 for count in seen_text_by_syllable_id.values())
+
+
 def test_generate_melody_and_satb_validate():
     req = CompositionRequest(
         sections=[LyricSection(label="verse", text="Glory rises in the dawn.")],

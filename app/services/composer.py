@@ -501,11 +501,13 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     candidate = _constrain_melodic_candidate(candidate, prev, "soprano", scale_set)
                     candidate = _nearest_pitch_class_with_leap(candidate, prev, chord_tones, "soprano")
 
+                lyric_text = item["syllable_text"] if mode not in {"melisma_continue", "tie_continue"} else None
+
                 soprano_notes.append(
                     ScoreNote(
                         pitch=midi_to_pitch(candidate),
                         beats=duration,
-                        lyric=item["syllable_text"],
+                        lyric=lyric_text,
                         lyric_syllable_id=item["syllable_id"],
                         lyric_mode=mode,
                         section_id=item["section_id"],
