@@ -140,6 +140,49 @@ def test_phrase_blocks_can_skip_barline_alignment_when_toggled_off():
     assert phrase_end_syllables[1].must_end_at_barline is True
     assert abs(beat_at_phrase_end[phrase_end_syllables[1].id] % 4) < 1e-9
 
+
+
+def test_phrase_blocks_with_breath_marker_enforce_phrase_boundary_and_keep_timing():
+    with_breath = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="holy holy\nforever amen")],
+        arrangement=[
+            ArrangementItem(
+                section_id="verse-1",
+                phrase_blocks=[
+                    PhraseBlock(text="holy holy", must_end_at_barline=False, breath_after_phrase=True),
+                    PhraseBlock(text="forever amen", must_end_at_barline=False, breath_after_phrase=False),
+                ],
+            )
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed"),
+    )
+    without_breath = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="holy holy\nforever amen")],
+        arrangement=[
+            ArrangementItem(
+                section_id="verse-1",
+                phrase_blocks=[
+                    PhraseBlock(text="holy holy", must_end_at_barline=False, breath_after_phrase=False),
+                    PhraseBlock(text="forever amen", must_end_at_barline=False, breath_after_phrase=False),
+                ],
+            )
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed"),
+    )
+
+    melody_with_breath = generate_melody_score(with_breath)
+    melody_without_breath = generate_melody_score(without_breath)
+
+    section = melody_with_breath.sections[0]
+    first_phrase_end = [s for s in section.syllables if s.phrase_end_after][0]
+    assert first_phrase_end.breath_after_phrase is True
+    assert first_phrase_end.phrase_end_after is True
+
+    beats_with_breath = sum(note.beats for measure in melody_with_breath.measures for note in measure.voices["soprano"])
+    beats_without_breath = sum(note.beats for measure in melody_without_breath.measures for note in measure.voices["soprano"])
+    assert beats_with_breath == beats_without_breath
+
+
 def test_continuation_notes_do_not_repeat_lyric_text():
     req = CompositionRequest(
         sections=[LyricSection(label="chorus", text="Gloria in excelsis deo")],

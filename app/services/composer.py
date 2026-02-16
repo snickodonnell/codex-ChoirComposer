@@ -265,8 +265,8 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
                 section.label,
                 section.label,
                 section.pause_beats,
-                [PhraseBlock(text=line.strip(), must_end_at_barline=True) for line in section.text.splitlines() if line.strip()]
-                or [PhraseBlock(text=section.text, must_end_at_barline=True)],
+                [PhraseBlock(text=line.strip(), must_end_at_barline=True, breath_after_phrase=False) for line in section.text.splitlines() if line.strip()]
+                or [PhraseBlock(text=section.text, must_end_at_barline=True, breath_after_phrase=False)],
             )
             for idx, section in enumerate(req.sections, start=1)
         ]
@@ -277,12 +277,12 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
         if section is None:
             raise ValueError(f"Arrangement references unknown section_id: {item.section_id}")
         phrase_blocks = item.phrase_blocks or [
-            PhraseBlock(text=line.strip(), must_end_at_barline=True)
+            PhraseBlock(text=line.strip(), must_end_at_barline=True, breath_after_phrase=False)
             for line in section.text.splitlines()
             if line.strip()
         ]
         if not phrase_blocks:
-            phrase_blocks = [PhraseBlock(text=section.text, must_end_at_barline=True)]
+            phrase_blocks = [PhraseBlock(text=section.text, must_end_at_barline=True, breath_after_phrase=False)]
         expanded.append((item.section_id, section.label, item.progression_cluster or section.label, item.pause_beats, phrase_blocks))
 
     return expanded
