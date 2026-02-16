@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
+
+from app.logging_utils import log_event
 from app.models import CanonicalScore, ScoreChord, ScoreMeasure, ScoreNote, VoiceName
 from app.services.music_theory import chord_symbol, parse_key, triad_pitch_classes
 from app.services.score_validation import beats_per_measure
 
 
 VOICE_NAMES: tuple[VoiceName, ...] = ("soprano", "alto", "tenor", "bass")
+logger = logging.getLogger(__name__)
 
 
 def normalize_score_for_rendering(score: CanonicalScore) -> CanonicalScore:
+    log_event(logger, "rendering_normalization_started", stage=score.meta.stage)
     beat_cap = beats_per_measure(score.meta.time_signature)
     per_voice_measures = {
         voice: _normalize_voice_stream(_flatten_voice(score, voice), beat_cap)
@@ -29,12 +34,21 @@ def normalize_score_for_rendering(score: CanonicalScore) -> CanonicalScore:
             )
         )
 
-    return score.model_copy(
+    normalized = score.model_copy(
         update={
             "measures": normalized_measures,
             "chord_progression": _normalize_harmony_coverage(score, normalized_measures),
         }
     )
+    added_measure_padding = max(0, measure_count - len(score.measures))
+    log_event(
+        logger,
+        "rendering_normalization_completed",
+        stage=score.meta.stage,
+        measure_count=measure_count,
+        added_measure_padding=added_measure_padding,
+    )
+    return normalized
 
 
 def _flatten_voice(score: CanonicalScore, voice: VoiceName) -> list[ScoreNote]:
@@ -133,4 +147,3 @@ def _first_section_id(measure: ScoreMeasure) -> str:
         if note.section_id != "padding":
             return note.section_id
     return "padding"
-

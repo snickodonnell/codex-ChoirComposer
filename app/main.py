@@ -1,9 +1,21 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+import logging
+import time
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.logging_utils import (
+    clear_request_context,
+    configure_logging,
+    current_request_id,
+    log_event,
+    new_request_id,
+    request_elapsed_ms,
+    set_request_context,
+)
 from app.models import (
     CompositionRequest,
     EndScoreResponse,
@@ -19,8 +31,55 @@ from app.services.pdf_export import build_score_pdf
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score
 
+configure_logging()
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Choir Composer")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or new_request_id()
+    set_request_context(request_id=request_id, route=request.url.path, method=request.method)
+    started = time.perf_counter()
+    log_event(logger, "request_started")
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = request_elapsed_ms(started)
+        log_event(logger, "request_completed", status_code=500, duration_ms=elapsed_ms)
+        raise
+
+    elapsed_ms = request_elapsed_ms(started)
+    log_event(logger, "request_completed", status_code=response.status_code, duration_ms=elapsed_ms)
+    response.headers["X-Request-ID"] = request_id
+    clear_request_context()
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(_request: Request, exc: Exception):
+    request_id = current_request_id()
+    logger.exception(
+        "unhandled_exception",
+        extra={"event": "unhandled_exception", "request_id": request_id},
+    )
+    response = JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Something went wrong while processing your request. Please try again.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+    clear_request_context()
+    return response
+
+
+def _friendly_validation_error(action: str, errors: list[str]) -> ValueError:
+    log_event(logger, "validation_failed", level=logging.ERROR, action=action, diagnostics=errors)
+    return ValueError(f"{action} could not proceed due to invalid score data.")
 
 
 def _require_score_stage(score, expected_stage: str, action: str) -> None:
@@ -31,7 +90,7 @@ def _require_score_stage(score, expected_stage: str, action: str) -> None:
 def _require_valid_score(score, action: str) -> None:
     errors = validate_score(normalize_score_for_rendering(score))
     if errors:
-        raise ValueError(f"{action} requires a valid input score. Resolve validation errors before continuing.")
+        raise _friendly_validation_error(action, errors)
 
 
 def _extract_melody_from_satb(score):
@@ -45,6 +104,17 @@ def _extract_melody_from_satb(score):
     return melody
 
 
+def _handle_user_error(action: str, exc: ValueError) -> HTTPException:
+    log_event(logger, "request_failed", level=logging.WARNING, action=action, reason=str(exc))
+    return HTTPException(
+        status_code=422,
+        detail={
+            "message": f"{action} failed. Please adjust inputs and try again.",
+            "request_id": current_request_id(),
+        },
+    )
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse("app/static/index.html")
@@ -52,10 +122,24 @@ def index() -> FileResponse:
 
 @app.post("/api/generate-melody", response_model=MelodyResponse)
 def generate_melody_endpoint(payload: CompositionRequest):
+    arrangement_labels = [item.section_id for item in payload.arrangement]
+    clusters = [item.progression_cluster for item in payload.arrangement if item.progression_cluster]
+    log_event(
+        logger,
+        "arrangement_inputs_received",
+        key=payload.preferences.key,
+        mode=payload.preferences.primary_mode,
+        time_signature=payload.preferences.time_signature,
+        tempo_bpm=payload.preferences.tempo_bpm,
+        section_labels=[section.label for section in payload.sections],
+        arrangement_order=arrangement_labels,
+        clusters_selected=clusters,
+    )
     try:
-        return MelodyResponse(score=normalize_score_for_rendering(generate_melody_score(payload)))
+        score = normalize_score_for_rendering(generate_melody_score(payload))
+        return MelodyResponse(score=score)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("Melody generation", exc) from exc
 
 
 @app.post("/api/refine-melody", response_model=MelodyResponse)
@@ -63,6 +147,14 @@ def refine_melody_endpoint(payload: RefineRequest):
     try:
         _require_score_stage(payload.score, "melody", "Melody refinement")
         _require_valid_score(payload.score, "Melody refinement")
+        log_event(
+            logger,
+            "draft_version_operation",
+            operation="update",
+            target="melody",
+            regenerate=payload.regenerate,
+            selected_clusters=payload.selected_clusters,
+        )
         return MelodyResponse(
             score=normalize_score_for_rendering(refine_score(
                 payload.score,
@@ -73,7 +165,7 @@ def refine_melody_endpoint(payload: RefineRequest):
             ))
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("Melody refinement", exc) from exc
 
 
 @app.post("/api/generate-satb", response_model=SATBResponse)
@@ -81,10 +173,11 @@ def generate_satb_endpoint(payload: HarmonizeRequest):
     try:
         _require_score_stage(payload.score, "melody", "SATB generation")
         _require_valid_score(payload.score, "SATB generation")
+        log_event(logger, "draft_version_operation", operation="create", target="satb")
         score = normalize_score_for_rendering(harmonize_score(payload.score))
         return SATBResponse(score=score, harmonization_notes="Chord-led SATB voicing with diatonic progression integrity checks.")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("SATB generation", exc) from exc
 
 
 @app.post("/api/refine-satb", response_model=SATBResponse)
@@ -92,6 +185,7 @@ def refine_satb_endpoint(payload: RefineRequest):
     try:
         _require_score_stage(payload.score, "satb", "SATB refinement")
         _require_valid_score(payload.score, "SATB refinement")
+        log_event(logger, "draft_version_operation", operation="update", target="satb", regenerate=payload.regenerate)
         melody_projection = _extract_melody_from_satb(payload.score)
         refined_melody = refine_score(
             melody_projection,
@@ -103,7 +197,7 @@ def refine_satb_endpoint(payload: RefineRequest):
         score = normalize_score_for_rendering(harmonize_score(refined_melody))
         return SATBResponse(score=score, harmonization_notes="Refined SATB while preserving progression authority.")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("SATB refinement", exc) from exc
 
 
 @app.post("/api/compose-end-score", response_model=EndScoreResponse)
@@ -117,13 +211,21 @@ def compose_end_score_endpoint(payload: CompositionRequest):
             composition_notes="Composed through the required workflow: input → melody → SATB end score.",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("End-score composition", exc) from exc
 
 
 @app.post("/api/validate-score")
 def validate_score_endpoint(payload: HarmonizeRequest):
     errors = validate_score(normalize_score_for_rendering(payload.score))
-    return {"valid": len(errors) == 0, "errors": errors}
+    if errors:
+        log_event(logger, "validation_failed", level=logging.ERROR, action="Score validation", diagnostics=errors)
+        return {
+            "valid": False,
+            "message": "The score failed validation. Please adjust your draft and try again.",
+            "request_id": current_request_id(),
+        }
+    log_event(logger, "validation_passed", action="Score validation")
+    return {"valid": True, "errors": []}
 
 
 @app.post("/api/export-pdf")
@@ -132,9 +234,11 @@ def export_pdf_endpoint(payload: PDFExportRequest):
         _require_score_stage(payload.score, "satb", "PDF export")
         _require_valid_score(payload.score, "PDF export")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("PDF export", exc) from exc
 
+    log_event(logger, "export_started", format="pdf")
     content = build_score_pdf(normalize_score_for_rendering(payload.score))
+    log_event(logger, "export_completed", format="pdf", output_size_bytes=len(content))
     return Response(
         content=content,
         media_type="application/pdf",
@@ -148,9 +252,11 @@ def export_musicxml_endpoint(payload: PDFExportRequest):
         _require_score_stage(payload.score, "satb", "MusicXML export")
         _require_valid_score(payload.score, "MusicXML export")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _handle_user_error("MusicXML export", exc) from exc
 
+    log_event(logger, "export_started", format="musicxml")
     content = export_musicxml(normalize_score_for_rendering(payload.score))
+    log_event(logger, "export_completed", format="musicxml", output_size_bytes=len(content.encode("utf-8")))
     return Response(
         content=content,
         media_type="application/vnd.recordare.musicxml+xml",

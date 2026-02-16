@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from io import BytesIO
+import logging
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 
+from app.logging_utils import log_event
 from app.models import CanonicalScore
+
+logger = logging.getLogger(__name__)
 
 
 def build_score_pdf(score: CanonicalScore) -> bytes:
+    log_event(logger, "pdf_render_started", measure_count=len(score.measures))
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     _, height = letter
@@ -66,4 +71,7 @@ def build_score_pdf(score: CanonicalScore) -> bytes:
     c.showPage()
     c.save()
     buffer.seek(0)
-    return buffer.read()
+    content = buffer.read()
+    page_count = c.getPageNumber()
+    log_event(logger, "pdf_render_completed", output_size_bytes=len(content), page_count=page_count)
+    return content

@@ -4,6 +4,8 @@ import logging
 import math
 import random
 
+from app.logging_utils import log_event
+
 from app.models import (
     CanonicalScore,
     CompositionRequest,
@@ -382,6 +384,7 @@ def _regenerate_progression_for_clusters(
         measure_count = measure_counts.get(section_id, len(section_chords))
 
         if cluster in target_clusters:
+            log_event(logger, "cluster_progression_generation_started", cluster_id=section_id, cluster_name=cluster, measure_count=measure_count)
             cycle = regenerated_cycles.get(cluster)
             if cycle is None:
                 base_cycle = _cluster_progression_cycle(scale, cluster)
@@ -399,6 +402,7 @@ def _regenerate_progression_for_clusters(
                 regenerated_cycles[cluster] = shifted_cycle
                 regenerated_section = _build_section_progression(scale, section_id, start_measure, measure_count, shifted_cycle)
             regenerated.extend(regenerated_section)
+            log_event(logger, "cluster_progression_generation_completed", cluster_id=section_id, cluster_name=cluster, measure_count=measure_count)
             continue
 
         regenerated.extend(section_chords)
@@ -534,6 +538,7 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     primary_mode = req.preferences.primary_mode
     error_history: list[str] = []
 
+    log_event(logger, "melody_generation_started", section_count=len(req.sections))
     for attempt_idx in range(MAX_GENERATION_ATTEMPTS):
         attempt = attempt_idx + 1
         score = _compose_melody_once(req, attempt_idx)
@@ -545,7 +550,7 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
             or err.startswith("Chord ")
         ]
         if harmony_issues:
-            logger.warning("Harmony validation failed on attempt %s before melody repair: %s", attempt, harmony_issues)
+            log_event(logger, "validation_failed", level=logging.WARNING, stage="melody_generation", attempt=attempt, reason="harmony_validation", diagnostics=harmony_issues)
             score.chord_progression = _repair_harmony_progression(
                 score.chord_progression,
                 len(score.measures),
@@ -556,19 +561,24 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
         score = normalize_score_for_rendering(score)
         errs = validate_score(score, primary_mode)
         if not errs:
+            log_event(logger, "validation_passed", stage="melody_generation", attempt=attempt)
+            log_event(logger, "melody_generation_completed", attempt=attempt)
             return score
 
-        logger.warning("Melody validation failed on attempt %s before repair: %s", attempt, errs)
+        log_event(logger, "validation_failed", level=logging.WARNING, stage="melody_generation", attempt=attempt, reason="pre_repair", diagnostics=errs)
         repaired = normalize_score_for_rendering(_auto_repair_melody_score(score, primary_mode))
         repaired_errs = validate_score(repaired, primary_mode)
         if not repaired_errs:
-            logger.info("Melody auto-repair succeeded on attempt %s.", attempt)
+            log_event(logger, "repair_retry_attempt", attempt=attempt, reason="validation_failure")
+            log_event(logger, "validation_passed", stage="melody_generation", attempt=attempt, repaired=True)
+            log_event(logger, "melody_generation_completed", attempt=attempt, repaired=True)
             return repaired
 
-        logger.warning("Melody validation failed on attempt %s after repair: %s", attempt, repaired_errs)
+        log_event(logger, "validation_failed", level=logging.WARNING, stage="melody_generation", attempt=attempt, reason="post_repair", diagnostics=repaired_errs)
+        log_event(logger, "repair_retry_attempt", level=logging.WARNING, attempt=attempt, reason="post_repair_validation_failure")
         error_history.append(f"attempt {attempt}: {'; '.join(repaired_errs)}")
 
-    logger.error("Melody generation exhausted retries. Validation errors: %s", error_history)
+    log_event(logger, "melody_generation_exhausted", level=logging.ERROR, diagnostics=error_history)
     raise ValueError(
         "Couldn’t generate a valid melody with the current constraints—try relaxing key/mode/time/tempo or click Regenerate"
     )
@@ -624,11 +634,14 @@ def refine_score(
     score.meta.rationale = f"Refined while preserving progression authority: {instruction}"
     errs = validate_score(score)
     if errs:
-        raise ValueError(f"Refined score failed validation: {'; '.join(errs)}")
+        log_event(logger, "validation_failed", level=logging.ERROR, stage="refine_score", diagnostics=errs)
+        raise ValueError("Refined score failed validation.")
+    log_event(logger, "validation_passed", stage="refine_score")
     return normalize_score_for_rendering(score)
 
 
 def harmonize_score(score: CanonicalScore) -> CanonicalScore:
+    log_event(logger, "rendering_started", target="satb")
     score = normalize_score_for_rendering(score)
     if not score.chord_progression:
         raise ValueError("Cannot harmonize without chord progression.")
@@ -706,5 +719,8 @@ def harmonize_score(score: CanonicalScore) -> CanonicalScore:
     satb = normalize_score_for_rendering(satb)
     errs = validate_score(satb)
     if errs:
-        raise ValueError(f"SATB score failed validation: {'; '.join(errs)}")
+        log_event(logger, "validation_failed", level=logging.ERROR, stage="harmonize_score", diagnostics=errs)
+        raise ValueError("SATB score failed validation.")
+    log_event(logger, "validation_passed", stage="harmonize_score")
+    log_event(logger, "rendering_completed", target="satb")
     return satb
