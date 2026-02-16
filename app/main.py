@@ -17,6 +17,7 @@ from app.logging_utils import (
     set_request_context,
 )
 from app.models import (
+    ClientLogEvent,
     CompositionRequest,
     EndScoreResponse,
     HarmonizeRequest,
@@ -199,6 +200,24 @@ def refine_satb_endpoint(payload: RefineRequest):
     except ValueError as exc:
         raise _handle_user_error("SATB refinement", exc) from exc
 
+
+
+@app.post("/api/client-log")
+def client_log_endpoint(payload: ClientLogEvent):
+    log_event(
+        logger,
+        "client_playback_event",
+        client_ts=payload.ts,
+        client_event=payload.event,
+        playback_type=payload.type,
+        playback_id=payload.id,
+        reason=payload.reason,
+        offset_seconds=payload.offsetSeconds,
+        total_seconds=payload.totalSeconds,
+        event_count=payload.events,
+        progress_seconds=payload.progressSeconds,
+    )
+    return {"ok": True}
 
 @app.post("/api/compose-end-score", response_model=EndScoreResponse)
 def compose_end_score_endpoint(payload: CompositionRequest):

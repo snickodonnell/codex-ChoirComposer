@@ -394,3 +394,79 @@ def test_melody_playback_still_works_after_satb_regenerate_and_stop_start_cycle(
                 browser.close()
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+def test_satb_stop_refine_start_cycle_emits_new_playback_start_event():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                page.click("#generateMelody")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                      return meta.trim().length > 0;
+                    }
+                    """,
+                    timeout=20000,
+                )
+
+                page.click("#generateSATB")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector('#satbMeta')?.textContent || '';
+                      return meta.trim().length > 0;
+                    }
+                    """,
+                    timeout=20000,
+                )
+
+                page.click("#startSATB")
+                page.wait_for_function(
+                    """
+                    () => Array.isArray(window.playbackEventLog)
+                      && window.playbackEventLog.some((entry) => entry.event === 'playback_started' && entry.type === 'satb')
+                    """,
+                    timeout=20000,
+                )
+                page.click("#stopSATB")
+
+                page.fill("#satbInstruction", "add more contrary motion")
+                page.click("#refineSATB")
+                page.wait_for_timeout(500)
+
+                previous_start_count = page.evaluate(
+                    """
+                    () => window.playbackEventLog.filter((entry) => entry.event === 'playback_started' && entry.type === 'satb').length
+                    """
+                )
+
+                page.click("#startSATB")
+                page.wait_for_function(
+                    """
+                    (startCount) => window.playbackEventLog.filter((entry) => entry.event === 'playback_started' && entry.type === 'satb').length > startCount
+                    """,
+                    arg=previous_start_count,
+                    timeout=20000,
+                )
+
+                assert page.evaluate(
+                    """
+                    () => {
+                      const events = window.playbackEventLog || [];
+                      const stopSeen = events.some((entry) => entry.event === 'playback_stopped' && entry.type === 'satb');
+                      const startSeen = events.filter((entry) => entry.event === 'playback_started' && entry.type === 'satb').length >= 2;
+                      return stopSeen && startSeen;
+                    }
+                    """
+                )
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
