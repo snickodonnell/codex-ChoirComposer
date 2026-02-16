@@ -161,6 +161,144 @@ def _align_to_strong_beat(plans: list[dict], beat_pos: float) -> float:
     return beat_pos
 
 
+def _strong_beat_positions(beats_per_bar: float) -> set[float]:
+    if abs(beats_per_bar - 4.0) < 1e-9:
+        return {0.0, 2.0}
+    if abs(beats_per_bar - 3.0) < 1e-9:
+        return {0.0}
+    return {0.0, beats_per_bar / 2.0}
+
+
+def _is_strong_beat(beat_pos: float, beats_per_bar: float) -> bool:
+    pos = beat_pos % beats_per_bar
+    return any(abs(pos - strong) < 1e-9 for strong in _strong_beat_positions(beats_per_bar))
+
+
+def _phrase_target_total_beats(phrase: list[ScoreSyllable], beats_per_bar: float) -> float:
+    min_beats_needed = 0.5 * len(phrase)
+    target_bars = max(1, math.ceil(min_beats_needed / beats_per_bar))
+    return target_bars * beats_per_bar
+
+
+def _base_syllable_options(
+    is_phrase_end: bool,
+    config: RhythmPolicyConfig,
+    rng: random.Random,
+) -> list[tuple[list[float], list[str]]]:
+    options: list[tuple[list[float], list[str]]] = [([1.0], ["single"]), ([0.5], ["subdivision"])]
+    if not is_phrase_end and (config.melismaRate > 0 or rng.random() < max(0.05, config.melismaRate)):
+        options.append(([0.5, 0.5], ["melisma_start", "melisma_continue"]))
+    if is_phrase_end:
+        hold = max(1.0, config.phraseEndHoldBeats)
+        if hold > 1.0:
+            options.append(([1.0, hold - 1.0], ["tie_start", "tie_continue"]))
+        else:
+            options.append(([hold], ["single"]))
+    return options
+
+
+def _score_phrase_template(
+    phrase: list[ScoreSyllable],
+    template: list[tuple[list[float], list[str]]],
+    beats_per_bar: float,
+    config: RhythmPolicyConfig,
+    rng: random.Random,
+) -> tuple[float, float]:
+    beat_pos = 0.0
+    score = 0.0
+    durations_for_leap = [sum(durations) for durations, _ in template]
+    continuation_count = sum(
+        1
+        for _durations, modes in template
+        for mode in modes
+        if mode in {"melisma_continue", "tie_continue"}
+    )
+
+    for idx, syllable in enumerate(phrase):
+        durations, _ = template[idx]
+        if syllable.stressed and _is_strong_beat(beat_pos, beats_per_bar):
+            score += 2.0
+        elif syllable.stressed:
+            score -= 1.0
+
+        short_notes = sum(1 for duration in durations if duration <= 0.5 + 1e-9)
+        score -= 0.5 * short_notes
+        beat_pos += sum(durations)
+
+    for i in range(1, len(durations_for_leap)):
+        gap = abs(durations_for_leap[i] - durations_for_leap[i - 1])
+        if gap > 1.0:
+            score -= 0.75 * gap
+
+    score += continuation_count * config.melismaRate * 1.25
+
+    # Keep deterministic tie-breaking but still seed-sensitive.
+    tie_break = rng.random() * 0.001
+    return score, tie_break
+
+
+def _search_phrase_template(
+    phrase: list[ScoreSyllable],
+    beats_per_bar: float,
+    config: RhythmPolicyConfig,
+    rng: random.Random,
+) -> list[tuple[list[float], list[str]]]:
+    target_total = _phrase_target_total_beats(phrase, beats_per_bar)
+    candidates: list[list[tuple[list[float], list[str]]]] = []
+    search_budget = 48
+
+    def rec(idx: int, running_total: float, partial: list[tuple[list[float], list[str]]]) -> None:
+        if len(candidates) >= search_budget:
+            return
+        if idx == len(phrase):
+            if abs(running_total - target_total) < 1e-9:
+                candidates.append([(d[:], m[:]) for d, m in partial])
+            return
+
+        remaining = len(phrase) - idx
+        min_remaining = 0.5 * (remaining - 1)
+        max_remaining = max(3.0, config.phraseEndHoldBeats + 2.0) + (remaining - 1)
+
+        is_phrase_end = idx == len(phrase) - 1
+        options = _base_syllable_options(is_phrase_end, config, rng)
+        rng.shuffle(options)
+
+        for durations, modes in options:
+            total = running_total + sum(durations)
+            if total + min_remaining > target_total + 1e-9:
+                continue
+            if total + max_remaining < target_total - 1e-9:
+                continue
+            partial.append((durations, modes))
+            rec(idx + 1, total, partial)
+            partial.pop()
+
+    rec(0, 0.0, [])
+
+    if not candidates:
+        fallback: list[tuple[list[float], list[str]]] = [([1.0], ["single"]) for _ in phrase]
+        total = sum(sum(durations) for durations, _ in fallback)
+        extension = target_total - total
+        if extension > 0:
+            fallback[-1] = ([1.0, extension], ["tie_start", "tie_continue"])
+        return fallback
+
+    best = max(candidates, key=lambda c: _score_phrase_template(phrase, c, beats_per_bar, config, rng))
+
+    has_continuation = any(
+        mode in {"melisma_continue", "tie_continue"}
+        for _durations, modes in best
+        for mode in modes
+    )
+    if not has_continuation and config.melismaRate >= 0.3:
+        for idx, (durations, modes) in enumerate(best[:-1]):
+            if len(durations) == 1 and abs(durations[0] - 1.0) < 1e-9:
+                best[idx] = ([0.5, 0.5], ["melisma_start", "melisma_continue"])
+                break
+
+    return best
+
+
 def plan_syllable_rhythm(
     syllables: list[ScoreSyllable],
     beats_per_bar: float,
@@ -183,34 +321,10 @@ def plan_syllable_rhythm(
 
     for phrase in phrases:
         phrase_plan: list[dict] = []
-        phrase_beat_pos = 0.0
-        must_end_at_barline = phrase[-1].must_end_at_barline if phrase else True
+        phrase_template = _search_phrase_template(phrase, beats_per_bar, config, rng)
+
         for idx, syl in enumerate(phrase):
-            if config.preferStrongBeatForStress and syl.stressed:
-                phrase_beat_pos = _align_to_strong_beat(phrase_plan, phrase_beat_pos)
-
-            is_phrase_end = idx == len(phrase) - 1
-            use_melisma = rng.random() < config.melismaRate
-            use_subdivision = (not use_melisma) and (rng.random() < config.subdivisionRate)
-
-            if is_phrase_end:
-                hold = config.phraseEndHoldBeats
-                if hold <= 1.0:
-                    durations = [hold]
-                    modes = ["single"]
-                else:
-                    durations = [1.0, hold - 1.0]
-                    modes = ["tie_start", "tie_continue"]
-            elif use_melisma:
-                durations = [0.5, 0.5]
-                modes = ["melisma_start", "melisma_continue"]
-            elif use_subdivision:
-                durations = [0.5]
-                modes = ["subdivision"]
-            else:
-                durations = [1.0]
-                modes = ["single"]
-
+            durations, modes = phrase_template[idx]
             phrase_plan.append(
                 {
                     "syllable_id": syl.id,
@@ -222,47 +336,6 @@ def plan_syllable_rhythm(
                     "stressed": syl.stressed,
                 }
             )
-            phrase_beat_pos += sum(durations)
-
-        # Determine the smallest bar-aligned phrase length that can contain the line,
-        # then reshape durations inside the phrase to fit it.
-        min_beats_needed = 0.5 * len(phrase)
-
-        def phrase_total() -> float:
-            return sum(sum(item["durations"]) for item in phrase_plan)
-
-        if must_end_at_barline:
-            total = phrase_total()
-            target_bars = max(math.ceil(min_beats_needed / beats_per_bar), math.ceil(total / beats_per_bar))
-            target_total = target_bars * beats_per_bar
-            if total > target_total + 1e-9:
-                for item in phrase_plan[:-1]:
-                    if total <= target_total + 1e-9:
-                        break
-                    if sum(item["durations"]) > 0.5 + 1e-9:
-                        item["durations"] = [0.5]
-                        item["modes"] = ["subdivision"]
-                        total = phrase_total()
-
-            while total > target_total + 1e-9:
-                target_bars += 1
-                target_total = target_bars * beats_per_bar
-
-            if total < target_total - 1e-9:
-                extension = target_total - total
-                tail = phrase_plan[-1]
-                if tail["modes"] and tail["modes"][-1] in {"tie_continue", "tie_start"}:
-                    tail["durations"][-1] += extension
-                    if len(tail["modes"]) == 1:
-                        tail["modes"] = ["tie_start"]
-                elif abs(extension - 0.5) < 1e-9:
-                    tail["durations"].append(0.5)
-                    tail["modes"].append("tie_continue")
-                    tail["modes"][0] = "tie_start"
-                else:
-                    tail["durations"].append(extension)
-                    tail["modes"].append("tie_continue")
-                    tail["modes"][0] = "tie_start"
 
         plans.extend(phrase_plan)
 

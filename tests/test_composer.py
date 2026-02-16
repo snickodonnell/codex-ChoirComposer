@@ -95,6 +95,25 @@ def test_rhythm_plan_never_places_next_line_inside_prior_line_measure():
 
 
 
+
+
+def test_phrase_search_exactly_fills_phrase_measures():
+    syllables = tokenize_section_lyrics("sec-1", "shine eternal glory")
+    cfg = config_for_preset("syllabic", "verse")
+    plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-phrase-fill")
+
+    total = sum(sum(item["durations"]) for item in plan)
+    assert abs(total % 4) < 1e-9
+
+
+def test_phrase_search_prefers_less_fragmented_syllabic_templates():
+    syllables = tokenize_section_lyrics("sec-1", "light of hope")
+    cfg = config_for_preset("syllabic", "verse")
+    plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-fragment")
+
+    short_count = sum(1 for item in plan for d in item["durations"] if d <= 0.5 + 1e-9)
+    assert short_count <= len(plan)
+
 def test_phrase_blocks_can_merge_with_next_phrase_to_form_run_on_phrase():
     req = CompositionRequest(
         sections=[LyricSection(id="verse-1", label="verse", text="glory rises\nforever amen")],
