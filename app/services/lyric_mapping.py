@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import re
+import math
 from dataclasses import dataclass
 
 from app.models import LyricRhythmPreset, ScoreSyllable, SectionLabel
@@ -134,53 +135,101 @@ def plan_syllable_rhythm(
     config: RhythmPolicyConfig,
     seed: str,
 ) -> list[dict]:
-    """Deterministic prosody-aware rhythm planning without index-pattern rules."""
+    """Deterministic prosody-aware rhythm planning that preserves lyric phrase boundaries at barlines."""
     rng = random.Random(seed)
     plans: list[dict] = []
-    beat_pos = 0.0
 
+    phrases: list[list[ScoreSyllable]] = []
+    current_phrase: list[ScoreSyllable] = []
     for syl in syllables:
-        if config.preferStrongBeatForStress and syl.stressed:
-            beat_pos = _align_to_strong_beat(plans, beat_pos)
+        current_phrase.append(syl)
+        if syl.phrase_end_after:
+            phrases.append(current_phrase)
+            current_phrase = []
+    if current_phrase:
+        phrases.append(current_phrase)
 
-        is_phrase_end = syl.phrase_end_after
-        use_melisma = rng.random() < config.melismaRate
-        use_subdivision = (not use_melisma) and (rng.random() < config.subdivisionRate)
+    for phrase in phrases:
+        phrase_plan: list[dict] = []
+        phrase_beat_pos = 0.0
+        for idx, syl in enumerate(phrase):
+            if config.preferStrongBeatForStress and syl.stressed:
+                phrase_beat_pos = _align_to_strong_beat(phrase_plan, phrase_beat_pos)
 
-        if is_phrase_end:
-            hold = config.phraseEndHoldBeats
-            if hold <= 1.0:
-                durations = [hold]
-                modes = ["single"]
+            is_phrase_end = idx == len(phrase) - 1
+            use_melisma = rng.random() < config.melismaRate
+            use_subdivision = (not use_melisma) and (rng.random() < config.subdivisionRate)
+
+            if is_phrase_end:
+                hold = config.phraseEndHoldBeats
+                if hold <= 1.0:
+                    durations = [hold]
+                    modes = ["single"]
+                else:
+                    durations = [1.0, hold - 1.0]
+                    modes = ["tie_start", "tie_continue"]
+            elif use_melisma:
+                durations = [0.5, 0.5]
+                modes = ["melisma_start", "melisma_continue"]
+            elif use_subdivision:
+                durations = [0.5]
+                modes = ["subdivision"]
             else:
-                durations = [1.0, hold - 1.0]
-                modes = ["tie_start", "tie_continue"]
-        elif use_melisma:
-            durations = [0.5, 0.5]
-            modes = ["melisma_start", "melisma_continue"]
-        elif use_subdivision:
-            durations = [0.5]
-            modes = ["subdivision"]
-        else:
-            durations = [1.0]
-            modes = ["single"]
+                durations = [1.0]
+                modes = ["single"]
 
-        remaining = beats_per_bar - (beat_pos % beats_per_bar)
-        if sum(durations) > remaining + 1e-9:
-            durations = [remaining]
-            modes = ["single"]
+            phrase_plan.append(
+                {
+                    "syllable_id": syl.id,
+                    "syllable_text": syl.text,
+                    "section_id": syl.section_id,
+                    "lyric_index": len(plans) + len(phrase_plan),
+                    "durations": durations,
+                    "modes": modes,
+                    "stressed": syl.stressed,
+                }
+            )
+            phrase_beat_pos += sum(durations)
 
-        plans.append(
-            {
-                "syllable_id": syl.id,
-                "syllable_text": syl.text,
-                "section_id": syl.section_id,
-                "lyric_index": len(plans),
-                "durations": durations,
-                "modes": modes,
-                "stressed": syl.stressed,
-            }
-        )
-        beat_pos += sum(durations)
+        # Determine the smallest bar-aligned phrase length that can contain the line,
+        # then reshape durations inside the phrase to fit it.
+        min_beats_needed = 0.5 * len(phrase)
+
+        def phrase_total() -> float:
+            return sum(sum(item["durations"]) for item in phrase_plan)
+
+        total = phrase_total()
+        target_bars = max(math.ceil(min_beats_needed / beats_per_bar), math.ceil(total / beats_per_bar))
+        target_total = target_bars * beats_per_bar
+        if total > target_total + 1e-9:
+            for item in phrase_plan[:-1]:
+                if total <= target_total + 1e-9:
+                    break
+                if sum(item["durations"]) > 0.5 + 1e-9:
+                    item["durations"] = [0.5]
+                    item["modes"] = ["subdivision"]
+                    total = phrase_total()
+
+        while total > target_total + 1e-9:
+            target_bars += 1
+            target_total = target_bars * beats_per_bar
+
+        if total < target_total - 1e-9:
+            extension = target_total - total
+            tail = phrase_plan[-1]
+            if tail["modes"] and tail["modes"][-1] in {"tie_continue", "tie_start"}:
+                tail["durations"][-1] += extension
+                if len(tail["modes"]) == 1:
+                    tail["modes"] = ["tie_start"]
+            elif abs(extension - 0.5) < 1e-9:
+                tail["durations"].append(0.5)
+                tail["modes"].append("tie_continue")
+                tail["modes"][0] = "tie_start"
+            else:
+                tail["durations"].append(extension)
+                tail["modes"].append("tie_continue")
+                tail["modes"][0] = "tie_start"
+
+        plans.extend(phrase_plan)
 
     return plans
