@@ -28,6 +28,14 @@ const stopSATBBtn = document.getElementById('stopSATB');
 const exportPDFBtn = document.getElementById('exportPDF');
 const exportMusicXMLBtn = document.getElementById('exportMusicXML');
 const loadTestDataBtn = document.getElementById('loadTestData');
+const refreshMelodyPreviewBtn = document.getElementById('refreshMelodyPreview');
+const refreshSatbPreviewBtn = document.getElementById('refreshSatbPreview');
+const melodyPreviewEl = document.getElementById('melodyPreview');
+const satbPreviewEl = document.getElementById('satbPreview');
+const melodyPreviewStatusEl = document.getElementById('melodyPreviewStatus');
+const satbPreviewStatusEl = document.getElementById('satbPreviewStatus');
+const melodyPreviewZoomEl = document.getElementById('melodyPreviewZoom');
+const satbPreviewZoomEl = document.getElementById('satbPreviewZoom');
 
 const formErrorsEl = document.getElementById('formErrors');
 const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
@@ -398,6 +406,7 @@ function renderMelody(score, heading = 'Melody') {
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
   drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano', { includeRests: true }), melodyScore.meta.time_signature, buildSectionBoundaryMap(melodyScore));
+  refreshPreview('melody');
 }
 
 function activeMelodyVersionId() {
@@ -430,6 +439,76 @@ function updateSatbDraftVersionOptions() {
   }
 }
 
+let melodyPreviewScale = 1;
+let satbPreviewScale = 1;
+
+function setPreviewStatus(target, message) {
+  const statusEl = target === 'melody' ? melodyPreviewStatusEl : satbPreviewStatusEl;
+  if (statusEl) statusEl.textContent = message;
+}
+
+function clearPreview(target) {
+  const previewEl = target === 'melody' ? melodyPreviewEl : satbPreviewEl;
+  if (previewEl) previewEl.innerHTML = '';
+  setPreviewStatus(target, 'No preview generated yet.');
+}
+
+function currentPreviewScale(target) {
+  return target === 'melody' ? melodyPreviewScale : satbPreviewScale;
+}
+
+function applyPreviewScale(target) {
+  const previewEl = target === 'melody' ? melodyPreviewEl : satbPreviewEl;
+  const scale = currentPreviewScale(target);
+  if (!previewEl) return;
+  previewEl.querySelectorAll('svg').forEach((svg) => {
+    svg.style.transform = `scale(${scale})`;
+    svg.style.width = `${100 / scale}%`;
+  });
+}
+
+function renderPreviewSvgs(target, artifacts, cacheHit) {
+  const previewEl = target === 'melody' ? melodyPreviewEl : satbPreviewEl;
+  if (!previewEl) return;
+
+  if (!artifacts?.length) {
+    previewEl.innerHTML = '';
+    setPreviewStatus(target, 'Preview service returned no pages.');
+    return;
+  }
+
+  previewEl.innerHTML = artifacts.map((artifact) => `
+    <div class="preview-svg-page" data-page="${artifact.page}">
+      ${artifact.svg}
+    </div>
+  `).join('');
+  applyPreviewScale(target);
+  setPreviewStatus(target, `Rendered ${artifacts.length} page(s)${cacheHit ? ' · cache hit' : ''}.`);
+}
+
+async function refreshPreview(target) {
+  const score = target === 'melody' ? melodyScore : satbScore;
+  if (!score) {
+    setPreviewStatus(target, `Generate ${target.toUpperCase()} first.`);
+    return;
+  }
+
+  setPreviewStatus(target, 'Rendering preview…');
+  try {
+    const res = await post('/api/engrave/preview', {
+      score,
+      preview_mode: target,
+      include_all_pages: target === 'satb',
+      scale: 42,
+    });
+    const payload = await res.json();
+    renderPreviewSvgs(target, payload.artifacts, payload.cache_hit);
+  } catch (error) {
+    setPreviewStatus(target, `Preview failed: ${String(error.message || error)}`);
+  }
+}
+
+
 function renderSatb(score, harmonizationNotes = null, heading = 'SATB') {
   satbScore = normalizeScoreForRendering(score);
   satbMeta.textContent = JSON.stringify({
@@ -441,6 +520,7 @@ function renderSatb(score, harmonizationNotes = null, heading = 'SATB') {
 
   const boundaryMap = buildSectionBoundaryMap(satbScore);
   ['soprano', 'alto', 'tenor', 'bass'].forEach((v) => drawStaff('satbSheet', heading === 'SATB' ? v.toUpperCase() : `${heading} · ${v.toUpperCase()}`, flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
+  refreshPreview('satb');
 }
 
 function safeRenderSatb(score, harmonizationNotes, heading = 'SATB') {
@@ -693,6 +773,8 @@ function loadHymnTestData() {
   document.getElementById('satbChords').textContent = formatChordLine(null);
   melodyMeta.textContent = '';
   satbMeta.textContent = '';
+  clearPreview('melody');
+  clearPreview('satb');
 
   clearValidationHighlights();
   showErrors([]);
@@ -1184,6 +1266,7 @@ function resetSatbStage({ clearHistory = false } = {}) {
   satbMeta.textContent = '';
   document.getElementById('satbChords').textContent = formatChordLine(null);
   document.getElementById('satbSheet').innerHTML = '';
+  clearPreview('satb');
   updateSatbDraftVersionOptions();
   updateActionAvailability();
 }
@@ -1353,3 +1436,8 @@ exportMusicXMLBtn.onclick = async () => {
   a.click();
   URL.revokeObjectURL(url);
 };
+
+if (refreshMelodyPreviewBtn) refreshMelodyPreviewBtn.onclick = () => refreshPreview('melody');
+if (refreshSatbPreviewBtn) refreshSatbPreviewBtn.onclick = () => refreshPreview('satb');
+if (melodyPreviewZoomEl) melodyPreviewZoomEl.oninput = () => { melodyPreviewScale = Number(melodyPreviewZoomEl.value) / 100; applyPreviewScale('melody'); };
+if (satbPreviewZoomEl) satbPreviewZoomEl.oninput = () => { satbPreviewScale = Number(satbPreviewZoomEl.value) / 100; applyPreviewScale('satb'); };
