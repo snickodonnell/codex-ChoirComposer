@@ -9,6 +9,7 @@ from app.logging_utils import log_event
 from app.models import (
     CanonicalScore,
     CompositionRequest,
+    PhraseBlock,
     ScoreChord,
     ScoreMeasure,
     ScoreMeta,
@@ -19,7 +20,7 @@ from app.services.lyric_mapping import (
     section_archetype,
     config_for_preset,
     plan_syllable_rhythm,
-    tokenize_section_lyrics,
+    tokenize_phrase_blocks,
 )
 from app.services.music_theory import (
     VOICE_RANGES,
@@ -251,7 +252,7 @@ def _repair_harmony_progression(chords: list[ScoreChord], measure_count: int, ke
 
     return sorted(repaired, key=lambda c: c.measure_number)
 
-def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float]]:
+def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float, list[PhraseBlock]]]:
     section_defs = {}
     for idx, section in enumerate(req.sections, start=1):
         section_key = section.id or f"section-{idx}"
@@ -264,16 +265,25 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
                 section.label,
                 section.label,
                 section.pause_beats,
+                [PhraseBlock(text=line.strip(), must_end_at_barline=True) for line in section.text.splitlines() if line.strip()]
+                or [PhraseBlock(text=section.text, must_end_at_barline=True)],
             )
             for idx, section in enumerate(req.sections, start=1)
         ]
 
-    expanded: list[tuple[str, str, str, float]] = []
+    expanded: list[tuple[str, str, str, float, list[PhraseBlock]]] = []
     for item in req.arrangement:
         section = section_defs.get(item.section_id)
         if section is None:
             raise ValueError(f"Arrangement references unknown section_id: {item.section_id}")
-        expanded.append((item.section_id, section.label, item.progression_cluster or section.label, item.pause_beats))
+        phrase_blocks = item.phrase_blocks or [
+            PhraseBlock(text=line.strip(), must_end_at_barline=True)
+            for line in section.text.splitlines()
+            if line.strip()
+        ]
+        if not phrase_blocks:
+            phrase_blocks = [PhraseBlock(text=section.text, must_end_at_barline=True)]
+        expanded.append((item.section_id, section.label, item.progression_cluster or section.label, item.pause_beats, phrase_blocks))
 
     return expanded
 
@@ -355,7 +365,7 @@ def _repair_phrase_end_barlines(score: CanonicalScore) -> None:
         syllable.id
         for section in score.sections
         for syllable in section.syllables
-        if syllable.phrase_end_after
+        if syllable.phrase_end_after and syllable.must_end_at_barline
     }
     if not phrase_end_ids:
         return
@@ -497,10 +507,10 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
 
-    for idx, (arranged_section_id, section_label, progression_cluster, arranged_pause_beats) in enumerate(arranged_instances, start=1):
+    for idx, (arranged_section_id, section_label, progression_cluster, arranged_pause_beats, phrase_blocks) in enumerate(arranged_instances, start=1):
         section = section_defs[arranged_section_id]
         section_id = f"sec-{idx}"
-        syllables = tokenize_section_lyrics(section_id, section.text)
+        syllables = tokenize_phrase_blocks(section_id, phrase_blocks)
         sections.append(
             ScoreSection(
                 id=section_id,

@@ -38,6 +38,12 @@ class ArrangementItem(BaseModel):
     section_id: str = Field(min_length=1, max_length=120)
     pause_beats: float = Field(default=0, ge=0, le=4)
     progression_cluster: str | None = Field(default=None, min_length=1, max_length=80)
+    phrase_blocks: list["PhraseBlock"] = Field(default_factory=list)
+
+
+class PhraseBlock(BaseModel):
+    text: str = Field(min_length=1)
+    must_end_at_barline: bool = True
 
 
 class CompositionPreferences(BaseModel):
@@ -119,6 +125,7 @@ class ScoreSyllable(BaseModel):
     hyphenated: bool = False
     stressed: bool = False
     phrase_end_after: bool = False
+    must_end_at_barline: bool = True
 
 
 class ScoreSection(BaseModel):

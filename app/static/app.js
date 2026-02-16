@@ -693,11 +693,49 @@ function refreshArrangementLibrarySelect() {
   refreshRegenerateClusterOptions();
 }
 
-function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = null) {
+
+function derivePhraseBlocksFromText(text) {
+  const blocks = (text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => ({ text: line, must_end_at_barline: true }));
+  if (!blocks.length && (text || '').trim()) {
+    blocks.push({ text: text.trim(), must_end_at_barline: true });
+  }
+  return blocks;
+}
+
+function renderPhraseBlocksEditor(item, phraseBlocks) {
+  const host = item.querySelector('.arrangement-phrase-blocks');
+  if (!host) return;
+  host.innerHTML = phraseBlocks.map((block, idx) => `
+    <div class="phrase-block-row" data-phrase-index="${idx}">
+      <input class="phrase-block-text" value="${block.text}" readonly />
+      <label class="phrase-block-toggle">
+        <input type="checkbox" class="arrangement-phrase-end-toggle" ${block.must_end_at_barline ? 'checked' : ''} />
+        must end at barline
+      </label>
+    </div>
+  `).join('');
+}
+
+function getArrangementItemPhraseBlocks(item) {
+  return [...item.querySelectorAll('.phrase-block-row')]
+    .map((row) => ({
+      text: row.querySelector('.phrase-block-text')?.value || '',
+      must_end_at_barline: row.querySelector('.arrangement-phrase-end-toggle')?.checked ?? true,
+    }))
+    .filter((block) => block.text.trim().length > 0);
+}
+
+function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = null, phraseBlocks = null) {
   if (!sectionId) return;
   const normalizedPause = pauseBeats ?? 0;
   const section = getSectionLibrary().find((entry) => entry.id === sectionId);
   const clusterValue = progressionCluster || section?.label || 'default';
+  const resolvedPhraseBlocks = phraseBlocks || derivePhraseBlocksFromText(section?.text || '');
   const item = document.createElement('div');
   item.className = 'arrangement-item';
   item.dataset.sectionId = sectionId;
@@ -710,6 +748,7 @@ function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = n
       <label>Pause after section (beats)
         <input class="arrangement-pause-beats" type="number" min="0" max="4" step="0.5" value="${normalizedPause}" />
       </label>
+      <div class="arrangement-phrase-blocks"></div>
     </div>
     <div class="arrangement-item-controls">
       <button type="button" class="arrangement-up">↑</button>
@@ -718,6 +757,7 @@ function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = n
     </div>
   `;
   arrangementListEl.appendChild(item);
+  renderPhraseBlocksEditor(item, resolvedPhraseBlocks);
   refreshArrangementLabels();
 }
 
@@ -895,6 +935,7 @@ function collectPayload() {
     section_id: item.dataset.sectionId,
     pause_beats: Number(item.querySelector('.arrangement-pause-beats')?.value) || 0,
     progression_cluster: item.querySelector('.arrangement-progression-cluster')?.value.trim() || null,
+    phrase_blocks: getArrangementItemPhraseBlocks(item),
   }));
 
   if (!sectionLibrary.length) {
@@ -907,6 +948,10 @@ function collectPayload() {
 
   if (arrangement.length && !arrangement.some((item) => sectionById.has(item.section_id))) {
     errors.push(createValidationIssue('Arrangement must contain at least one valid section item with lyrics.', arrangementCard));
+  }
+
+  if (arrangement.some((item) => !item.phrase_blocks.length)) {
+    errors.push(createValidationIssue('Each arrangement item must include at least one phrase block.', arrangementCard));
   }
 
   if (!arrangement.length) {

@@ -149,7 +149,7 @@ def _validate_phrase_barline_alignment(score: CanonicalScore) -> list[str]:
         syllable.id
         for section in score.sections
         for syllable in section.syllables
-        if syllable.phrase_end_after
+        if syllable.phrase_end_after and syllable.must_end_at_barline
     }
     if not phrase_end_ids:
         return errors
