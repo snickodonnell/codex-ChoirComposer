@@ -5,7 +5,7 @@ import re
 import math
 from dataclasses import dataclass
 
-from app.models import LyricRhythmPreset, ScoreSyllable, SectionLabel
+from app.models import LyricRhythmPreset, PhraseBlock, ScoreSyllable, SectionLabel
 
 
 def section_archetype(section_label: SectionLabel) -> str:
@@ -73,42 +73,70 @@ def split_word_into_syllables(word: str) -> list[str]:
 
 
 def tokenize_section_lyrics(section_id: str, text: str) -> list[ScoreSyllable]:
+    phrase_blocks = [
+        PhraseBlock(text=line.strip(), must_end_at_barline=True)
+        for line in text.splitlines()
+        if line.strip()
+    ]
+    if not phrase_blocks:
+        phrase_blocks = [PhraseBlock(text=text, must_end_at_barline=True)]
+    return tokenize_phrase_blocks(section_id, phrase_blocks)
+
+
+def tokenize_phrase_blocks(section_id: str, phrase_blocks: list[PhraseBlock]) -> list[ScoreSyllable]:
+    normalized_blocks = [block for block in phrase_blocks if block.text.strip()]
+    if not normalized_blocks:
+        return []
+
+    syllables = _tokenize_phrase_blocks_internal(section_id, normalized_blocks)
+    if syllables:
+        syllables[-1].phrase_end_after = True
+    return syllables
+
+
+def _tokenize_phrase_blocks_internal(section_id: str, phrase_blocks: list[PhraseBlock]) -> list[ScoreSyllable]:
     token_re = re.compile(r"[A-Za-z']+(?:-[A-Za-z']+)*|[\n]|[.,;?!]")
-    tokens = token_re.findall(text)
 
     out: list[ScoreSyllable] = []
     syllable_counter = 0
     word_index = -1
+    total_blocks = len(phrase_blocks)
 
-    for i, tok in enumerate(tokens):
-        if tok in {"\n", ".", ",", ";", "?", "!"}:
-            if out:
-                out[-1].phrase_end_after = True
-            continue
+    for block_index, block in enumerate(phrase_blocks):
+        tokens = token_re.findall(block.text)
+        last_syllable_index_in_block: int | None = None
 
-        word_index += 1
-        parts = tok.split("-")
-        for part_idx, part in enumerate(parts):
-            sylls = split_word_into_syllables(part)
-            for si, syl in enumerate(sylls):
-                out.append(
-                    ScoreSyllable(
-                        id=f"{section_id}-syl-{syllable_counter}",
-                        text=syl,
-                        section_id=section_id,
-                        word_index=word_index,
-                        syllable_index_in_word=si,
-                        word_text=tok,
-                        hyphenated=(len(parts) > 1 and part_idx < len(parts) - 1),
-                        stressed=_is_stressed(syl, si, len(sylls)),
-                        phrase_end_after=False,
+        for i, tok in enumerate(tokens):
+            if tok in {"\n", ".", ",", ";", "?", "!"}:
+                continue
+
+            word_index += 1
+            parts = tok.split("-")
+            for part_idx, part in enumerate(parts):
+                sylls = split_word_into_syllables(part)
+                for si, syl in enumerate(sylls):
+                    out.append(
+                        ScoreSyllable(
+                            id=f"{section_id}-syl-{syllable_counter}",
+                            text=syl,
+                            section_id=section_id,
+                            word_index=word_index,
+                            syllable_index_in_word=si,
+                            word_text=tok,
+                            hyphenated=(len(parts) > 1 and part_idx < len(parts) - 1),
+                            stressed=_is_stressed(syl, si, len(sylls)),
+                            phrase_end_after=False,
+                            must_end_at_barline=block.must_end_at_barline,
+                        )
                     )
-                )
-                syllable_counter += 1
+                    last_syllable_index_in_block = len(out) - 1
+                    syllable_counter += 1
 
-        # Also mark phrase ends if punctuation follows immediately.
-        if i + 1 < len(tokens) and tokens[i + 1] in {"\n", ".", ",", ";", "?", "!"}:
-            out[-1].phrase_end_after = True
+            if i + 1 < len(tokens) and tokens[i + 1] in {".", ",", ";", "?", "!"} and out:
+                out[-1].phrase_end_after = True
+
+        if last_syllable_index_in_block is not None and block_index < total_blocks - 1:
+            out[last_syllable_index_in_block].phrase_end_after = True
 
     return out
 
@@ -152,6 +180,7 @@ def plan_syllable_rhythm(
     for phrase in phrases:
         phrase_plan: list[dict] = []
         phrase_beat_pos = 0.0
+        must_end_at_barline = phrase[-1].must_end_at_barline if phrase else True
         for idx, syl in enumerate(phrase):
             if config.preferStrongBeatForStress and syl.stressed:
                 phrase_beat_pos = _align_to_strong_beat(phrase_plan, phrase_beat_pos)
@@ -198,37 +227,38 @@ def plan_syllable_rhythm(
         def phrase_total() -> float:
             return sum(sum(item["durations"]) for item in phrase_plan)
 
-        total = phrase_total()
-        target_bars = max(math.ceil(min_beats_needed / beats_per_bar), math.ceil(total / beats_per_bar))
-        target_total = target_bars * beats_per_bar
-        if total > target_total + 1e-9:
-            for item in phrase_plan[:-1]:
-                if total <= target_total + 1e-9:
-                    break
-                if sum(item["durations"]) > 0.5 + 1e-9:
-                    item["durations"] = [0.5]
-                    item["modes"] = ["subdivision"]
-                    total = phrase_total()
-
-        while total > target_total + 1e-9:
-            target_bars += 1
+        if must_end_at_barline:
+            total = phrase_total()
+            target_bars = max(math.ceil(min_beats_needed / beats_per_bar), math.ceil(total / beats_per_bar))
             target_total = target_bars * beats_per_bar
+            if total > target_total + 1e-9:
+                for item in phrase_plan[:-1]:
+                    if total <= target_total + 1e-9:
+                        break
+                    if sum(item["durations"]) > 0.5 + 1e-9:
+                        item["durations"] = [0.5]
+                        item["modes"] = ["subdivision"]
+                        total = phrase_total()
 
-        if total < target_total - 1e-9:
-            extension = target_total - total
-            tail = phrase_plan[-1]
-            if tail["modes"] and tail["modes"][-1] in {"tie_continue", "tie_start"}:
-                tail["durations"][-1] += extension
-                if len(tail["modes"]) == 1:
-                    tail["modes"] = ["tie_start"]
-            elif abs(extension - 0.5) < 1e-9:
-                tail["durations"].append(0.5)
-                tail["modes"].append("tie_continue")
-                tail["modes"][0] = "tie_start"
-            else:
-                tail["durations"].append(extension)
-                tail["modes"].append("tie_continue")
-                tail["modes"][0] = "tie_start"
+            while total > target_total + 1e-9:
+                target_bars += 1
+                target_total = target_bars * beats_per_bar
+
+            if total < target_total - 1e-9:
+                extension = target_total - total
+                tail = phrase_plan[-1]
+                if tail["modes"] and tail["modes"][-1] in {"tie_continue", "tie_start"}:
+                    tail["durations"][-1] += extension
+                    if len(tail["modes"]) == 1:
+                        tail["modes"] = ["tie_start"]
+                elif abs(extension - 0.5) < 1e-9:
+                    tail["durations"].append(0.5)
+                    tail["modes"].append("tie_continue")
+                    tail["modes"][0] = "tie_start"
+                else:
+                    tail["durations"].append(extension)
+                    tail["modes"].append("tie_continue")
+                    tail["modes"][0] = "tie_start"
 
         plans.extend(phrase_plan)
 

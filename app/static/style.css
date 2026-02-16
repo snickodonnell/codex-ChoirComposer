@@ -33,6 +33,11 @@ button:hover { background: #1e40af; }
 .arrangement-item-controls button { background: #475569; margin-right: 0; padding: .3rem .55rem; }
 .arrangement-item-controls button:hover { background: #334155; }
 .arrangement-item-meta { font-size: .9rem; color: #0f172a; }
+.arrangement-phrase-blocks { display: grid; gap: .3rem; margin-top: .2rem; }
+.phrase-block-row { display: flex; gap: .45rem; align-items: center; }
+.phrase-block-text { flex: 1; background: #eef2ff; color: #1e293b; }
+.phrase-block-toggle { margin-bottom: 0; font-size: .75rem; color: #334155; display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; }
+.phrase-block-toggle input { margin-top: 0; }
 .actions { display: flex; gap: .5rem; margin: .75rem 0; }
 .actions input { flex: 1; }
 pre { background: #0b1220; color: #e5e7eb; padding: .6rem; border-radius: 8px; overflow: auto; }

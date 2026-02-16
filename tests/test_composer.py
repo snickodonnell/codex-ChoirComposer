@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.services import composer as composer_service
-from app.models import CanonicalScore, CompositionPreferences, CompositionRequest, LyricSection
+from app.models import ArrangementItem, CanonicalScore, CompositionPreferences, CompositionRequest, LyricSection, PhraseBlock
 from app.services.composer import generate_melody_score, harmonize_score, refine_score
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
 from app.services.music_theory import VOICE_RANGES, pitch_to_midi
@@ -92,6 +92,53 @@ def test_rhythm_plan_never_places_next_line_inside_prior_line_measure():
 
     assert next_line_started
 
+
+
+
+def test_phrase_blocks_can_skip_barline_alignment_when_toggled_off():
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="glory rises\nforever amen")],
+        arrangement=[
+            ArrangementItem(
+                section_id="verse-1",
+                phrase_blocks=[
+                    PhraseBlock(text="glory rises", must_end_at_barline=False),
+                    PhraseBlock(text="forever amen", must_end_at_barline=True),
+                ],
+            )
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+    first_section = melody.sections[0]
+    phrase_end_syllables = [s for s in first_section.syllables if s.phrase_end_after]
+
+    assert len(phrase_end_syllables) >= 2
+
+    soprano = [n for m in melody.measures for n in m.voices["soprano"]]
+    beat_pos = 0.0
+    beat_at_phrase_end: dict[str, float] = {}
+    last_note_index_for_syllable = {}
+    for idx, note in enumerate(soprano):
+        if note.lyric_syllable_id:
+            last_note_index_for_syllable[note.lyric_syllable_id] = idx
+
+    for idx, note in enumerate(soprano):
+        beat_pos += note.beats
+        syllable_id = note.lyric_syllable_id
+        if not syllable_id:
+            continue
+        if last_note_index_for_syllable.get(syllable_id) != idx:
+            continue
+        phrase_syllable = next((s for s in phrase_end_syllables if s.id == syllable_id), None)
+        if phrase_syllable:
+            beat_at_phrase_end[syllable_id] = beat_pos
+
+    assert phrase_end_syllables[0].must_end_at_barline is False
+    assert abs(beat_at_phrase_end[phrase_end_syllables[0].id] % 4) > 1e-9
+    assert phrase_end_syllables[1].must_end_at_barline is True
+    assert abs(beat_at_phrase_end[phrase_end_syllables[1].id] % 4) < 1e-9
 
 def test_continuation_notes_do_not_repeat_lyric_text():
     req = CompositionRequest(
