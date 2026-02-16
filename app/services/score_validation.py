@@ -26,6 +26,7 @@ def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> li
 
     errors.extend(_validate_chord_progression(score, effective_mode))
     errors.extend(_validate_lyric_mapping(score))
+    errors.extend(_validate_phrase_barline_alignment(score))
     errors.extend(_validate_ranges_and_motion(score))
     errors.extend(_validate_harmonic_integrity(score))
 
@@ -137,6 +138,35 @@ def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
         missing = expected_ids[section.id] - mapped_ids[section.id]
         if missing:
             errors.append(f"Section {section.id} has unmapped syllables: {sorted(missing)}")
+
+    return errors
+
+
+def _validate_phrase_barline_alignment(score: CanonicalScore) -> list[str]:
+    errors: list[str] = []
+    bpb = beats_per_measure(score.meta.time_signature)
+    phrase_end_ids = {
+        syllable.id
+        for section in score.sections
+        for syllable in section.syllables
+        if syllable.phrase_end_after
+    }
+    if not phrase_end_ids:
+        return errors
+
+    last_end_by_syllable: dict[str, float] = {}
+    cursor = 0.0
+    for note in _flatten_voice(score, "soprano"):
+        end_cursor = cursor + note.beats
+        if not note.is_rest and note.lyric_syllable_id in phrase_end_ids:
+            last_end_by_syllable[note.lyric_syllable_id] = end_cursor
+        cursor = end_cursor
+
+    for syllable_id, end_pos in sorted(last_end_by_syllable.items(), key=lambda item: item[1]):
+        if abs(end_pos % bpb) > 1e-6:
+            errors.append(
+                f"Lyric phrase ending at syllable {syllable_id} ends at beat {end_pos:g}, not on a barline."
+            )
 
     return errors
 

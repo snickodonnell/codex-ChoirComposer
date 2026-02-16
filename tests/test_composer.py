@@ -404,6 +404,93 @@ def test_d_minor_diatonic_accepts_expected_chords():
 
     assert validate_score(CanonicalScore.model_validate(score)) == []
 
+
+
+def test_validate_score_flags_phrase_end_not_on_barline():
+    score = CanonicalScore.model_validate(
+        {
+            "meta": {
+                "key": "C",
+                "primary_mode": "ionian",
+                "time_signature": "4/4",
+                "tempo_bpm": 88,
+                "style": "Hymn",
+                "stage": "melody",
+                "rationale": "test",
+            },
+            "sections": [
+                {
+                    "id": "sec-1",
+                    "label": "verse",
+                    "pause_beats": 0,
+                    "lyrics": "amen",
+                    "syllables": [
+                        {
+                            "id": "sec-1-syl-0",
+                            "text": "a",
+                            "section_id": "sec-1",
+                            "word_index": 0,
+                            "syllable_index_in_word": 0,
+                            "word_text": "amen",
+                            "hyphenated": False,
+                            "stressed": True,
+                            "phrase_end_after": True,
+                        }
+                    ],
+                }
+            ],
+            "measures": [
+                {
+                    "number": 1,
+                    "voices": {
+                        "soprano": [
+                            {
+                                "pitch": "C4",
+                                "beats": 3,
+                                "section_id": "sec-1",
+                                "lyric_syllable_id": "sec-1-syl-0",
+                                "lyric_mode": "single",
+                                "lyric": "amen",
+                            },
+                            {"pitch": "REST", "beats": 1, "is_rest": True, "section_id": "padding"},
+                        ],
+                        "alto": [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}],
+                        "tenor": [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}],
+                        "bass": [{"pitch": "REST", "beats": 4, "is_rest": True, "section_id": "padding"}],
+                    },
+                }
+            ],
+            "chord_progression": [
+                {"measure_number": 1, "section_id": "sec-1", "symbol": "C", "degree": 1, "pitch_classes": [0, 4, 7]}
+            ],
+        }
+    )
+
+    errors = validate_score(score)
+
+    assert any("ends at beat 3" in err for err in errors)
+
+
+def test_generate_melody_repairs_phrase_end_barlines(monkeypatch):
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="one two")],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="syllabic", key="C", tempo_bpm=88),
+    )
+
+    original_compose = composer_service._compose_melody_once
+
+    def broken_compose(_req, _attempt_number):
+        score = original_compose(_req, _attempt_number)
+        soprano = [n for m in score.measures for n in m.voices["soprano"] if not n.is_rest]
+        phrase_tail = next(n for n in reversed(soprano) if n.lyric_syllable_id)
+        phrase_tail.beats -= 1
+        return score
+
+    monkeypatch.setattr(composer_service, "_compose_melody_once", broken_compose)
+    melody = composer_service.generate_melody_score(req)
+
+    assert validate_score(melody) == []
+
 def test_generate_melody_failure_uses_friendly_message(monkeypatch):
     req = CompositionRequest(
         sections=[LyricSection(label="verse", text="Morning light renews us")],
