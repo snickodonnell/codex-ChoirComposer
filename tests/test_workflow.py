@@ -237,3 +237,34 @@ def test_generate_melody_amazing_grace_respects_16_bars_per_verse_and_stacks_to_
     assert full_measures("sec-1") == 16
     assert full_measures("sec-3") == 16
     assert full_measures("sec-5") == 16
+
+
+def test_generate_melody_34_manual_pickup_enforces_exact_verse_measure_structure():
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
+            }
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2}
+        ],
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+
+    assert res.status_code == 200
+    score = res.json()["score"]
+    assert len(score["measures"]) == 16
+
+    first_measure = score["measures"][0]["voices"]["soprano"]
+    first_measure_non_rest = sum(note["beats"] for note in first_measure if note["section_id"] == "sec-1" and not note["is_rest"])
+    assert first_measure_non_rest == 1
+
+    for measure in score["measures"]:
+        total_beats = sum(note["beats"] for note in measure["voices"]["soprano"])
+        assert total_beats == 3
