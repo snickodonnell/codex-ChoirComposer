@@ -61,3 +61,97 @@ def test_export_musicxml_includes_arrangement_music_unit_mapping_comments():
     assert "<!-- arrangement-music-units -->" in xml
     assert "arrangement_index=0,cluster_id=Verse,verse_index=1" in xml
     assert "arrangement_index=1,cluster_id=Verse,verse_index=2" in xml
+
+from app.models import ArrangementMusicUnit, CanonicalScore, ScoreMeasure, ScoreMeta, ScoreNote, ScoreSection
+
+
+def _build_note(section_id: str, lyric: str, beats: float = 4.0) -> ScoreNote:
+    return ScoreNote(
+        pitch="C4",
+        beats=beats,
+        is_rest=False,
+        lyric=lyric,
+        lyric_syllable_id=f"{section_id}-{lyric}",
+        lyric_mode="single",
+        section_id=section_id,
+        lyric_index=0,
+    )
+
+
+def _build_satb_measure(number: int, section_id: str, lyric: str, beats: float = 4.0) -> ScoreMeasure:
+    soprano_note = _build_note(section_id, lyric, beats=beats)
+    return ScoreMeasure(
+        number=number,
+        voices={
+            "soprano": [soprano_note],
+            "alto": [ScoreNote(pitch="A3", beats=beats, is_rest=False, section_id=section_id)],
+            "tenor": [ScoreNote(pitch="E3", beats=beats, is_rest=False, section_id=section_id)],
+            "bass": [ScoreNote(pitch="C3", beats=beats, is_rest=False, section_id=section_id)],
+        },
+    )
+
+
+def test_export_musicxml_stacks_cluster_verses_on_single_notation_block():
+    score = CanonicalScore(
+        meta=ScoreMeta(
+            key="C",
+            time_signature="4/4",
+            tempo_bpm=90,
+            style="Hymn",
+            stage="satb",
+            rationale="test",
+            arrangement_music_units=[
+                ArrangementMusicUnit(arrangement_index=0, cluster_id="Verse", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=1, cluster_id="Verse", verse_index=2),
+            ],
+        ),
+        sections=[
+            ScoreSection(id="sec-1", label="Verse 1", lyrics="Amazing", syllables=[]),
+            ScoreSection(id="sec-2", label="Verse 2", lyrics="Graceful", syllables=[]),
+        ],
+        measures=[
+            _build_satb_measure(1, "sec-1", "Amazing", beats=4.0),
+            _build_satb_measure(2, "sec-2", "Graceful", beats=4.0),
+        ],
+        chord_progression=[],
+    )
+
+    xml = export_musicxml(score)
+
+    assert xml.count("<measure number=") == 1
+    assert '<lyric number="1">' in xml
+    assert '<lyric number="2">' in xml
+    assert "<text>Amazing</text>" in xml
+    assert "<text>Graceful</text>" in xml
+    assert "<words>Verse (Verse 1, Verse 2)</words>" in xml
+
+
+def test_export_musicxml_falls_back_to_duplicate_notation_when_cluster_structure_differs(caplog):
+    score = CanonicalScore(
+        meta=ScoreMeta(
+            key="C",
+            time_signature="4/4",
+            tempo_bpm=90,
+            style="Hymn",
+            stage="satb",
+            rationale="test",
+            arrangement_music_units=[
+                ArrangementMusicUnit(arrangement_index=0, cluster_id="Verse", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=1, cluster_id="Verse", verse_index=2),
+            ],
+        ),
+        sections=[
+            ScoreSection(id="sec-1", label="Verse 1", lyrics="Amazing", syllables=[]),
+            ScoreSection(id="sec-2", label="Verse 2", lyrics="Graceful", syllables=[]),
+        ],
+        measures=[
+            _build_satb_measure(1, "sec-1", "Amazing", beats=4.0),
+            _build_satb_measure(2, "sec-2", "Graceful", beats=2.0),
+        ],
+        chord_progression=[],
+    )
+
+    xml = export_musicxml(score)
+
+    assert xml.count("<measure number=") == 2
+    assert "musicxml_verse_stacking_fallback" in caplog.text
