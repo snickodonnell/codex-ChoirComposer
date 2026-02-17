@@ -34,7 +34,7 @@ from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import EngravingOptions, preview_service
 from app.services.pdf_export import build_score_pdf
 from app.services.score_normalization import normalize_score_for_rendering
-from app.services.score_validation import validate_score
+from app.services.score_validation import validate_score, validate_score_diagnostics
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -82,8 +82,8 @@ async def global_exception_handler(_request: Request, exc: Exception):
     return response
 
 
-def _friendly_validation_error(action: str, errors: list[str]) -> ValueError:
-    log_event(logger, "validation_failed", level=logging.ERROR, action=action, diagnostics=errors)
+def _friendly_validation_error(action: str, diagnostics: list[str], level: int = logging.ERROR) -> ValueError:
+    log_event(logger, "validation_failed", level=level, action=action, diagnostics=diagnostics)
     return ValueError(f"{action} could not proceed due to invalid score data.")
 
 
@@ -92,10 +92,13 @@ def _require_score_stage(score, expected_stage: str, action: str) -> None:
         raise ValueError(f"{action} requires a {expected_stage} score, but received stage '{score.meta.stage}'.")
 
 
-def _require_valid_score(score, action: str) -> None:
-    errors = validate_score(normalize_score_for_rendering(score))
-    if errors:
-        raise _friendly_validation_error(action, errors)
+def _require_valid_score(score, action: str) -> list[str]:
+    report = validate_score_diagnostics(normalize_score_for_rendering(score))
+    if report.fatal:
+        raise _friendly_validation_error(action, report.fatal, level=logging.ERROR)
+    if report.warnings:
+        log_event(logger, "validation_failed", level=logging.WARNING, action=action, diagnostics=report.warnings)
+    return report.warnings
 
 
 def _extract_melody_from_satb(score):
@@ -147,7 +150,8 @@ def generate_melody_endpoint(payload: CompositionRequest):
     )
     try:
         score = normalize_score_for_rendering(generate_melody_score(payload))
-        return MelodyResponse(score=score)
+        warnings = _require_valid_score(score, "Melody generation")
+        return MelodyResponse(score=score, warnings=warnings)
     except MelodyGenerationFailedError as exc:
         log_event(
             logger,
@@ -257,16 +261,21 @@ def compose_end_score_endpoint(payload: CompositionRequest):
 
 @app.post("/api/validate-score")
 def validate_score_endpoint(payload: HarmonizeRequest):
-    errors = validate_score(normalize_score_for_rendering(payload.score))
-    if errors:
-        log_event(logger, "validation_failed", level=logging.ERROR, action="Score validation", diagnostics=errors)
+    report = validate_score_diagnostics(normalize_score_for_rendering(payload.score))
+    if report.fatal:
+        log_event(logger, "validation_failed", level=logging.ERROR, action="Score validation", diagnostics=report.fatal)
         return {
             "valid": False,
             "message": "The score failed validation. Please adjust your draft and try again.",
             "request_id": current_request_id(),
+            "errors": report.fatal,
+            "warnings": report.warnings,
         }
-    log_event(logger, "validation_passed", action="Score validation")
-    return {"valid": True, "errors": []}
+    if report.warnings:
+        log_event(logger, "validation_failed", level=logging.WARNING, action="Score validation", diagnostics=report.warnings)
+    else:
+        log_event(logger, "validation_passed", action="Score validation")
+    return {"valid": True, "errors": [], "warnings": report.warnings}
 
 
 @app.post("/api/export-pdf")
@@ -310,7 +319,7 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
     action = "Engraving preview"
     try:
         _require_score_stage(payload.score, payload.preview_mode, action)
-        _require_valid_score(payload.score, action)
+        warnings = _require_valid_score(payload.score, action)
     except ValueError as exc:
         raise _handle_user_error(action, exc) from exc
 
@@ -333,6 +342,7 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
         preview_mode=payload.preview_mode,
         cache_hit=cache_hit,
         artifacts=[EngravingPreviewArtifact(page=item.page, svg=item.svg) for item in artifacts],
+        warnings=warnings,
     )
     log_event(logger, "engraving_preview_completed", preview_mode=payload.preview_mode, pages=len(response.artifacts), cache_hit=cache_hit)
     return response

@@ -50,6 +50,8 @@ pre { background: #0b1220; color: #e5e7eb; padding: .6rem; border-radius: 8px; o
 
 .form-errors { display: none; margin-top: .6rem; padding: .5rem .6rem; border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 8px; font-size: .9rem; }
 
+.composer-warnings { margin-top: .6rem; padding: .5rem .6rem; border: 1px solid #fcd34d; background: #fffbeb; color: #92400e; border-radius: 8px; font-size: .9rem; }
+
 .field-error { border-color: #dc2626 !important; box-shadow: 0 0 0 2px rgba(220, 38, 38, .15); }
 
 .preview-panel { border: 1px solid #dbe3ef; border-radius: 10px; padding: .6rem; margin-top: .75rem; background: #f8fbff; }

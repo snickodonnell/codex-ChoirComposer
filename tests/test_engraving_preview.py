@@ -71,3 +71,42 @@ def test_preview_endpoint_accepts_pickup_enabled_score(monkeypatch):
     res = client.post("/api/engrave/preview", json=payload)
     assert res.status_code == 200
     assert res.json()["artifacts"][0]["svg"].startswith("<svg")
+
+
+def test_preview_endpoint_succeeds_with_warning_only_diagnostics(monkeypatch):
+    satb = harmonize_score(_melody_score())
+
+    class StubService:
+        def render_preview(self, score, options):
+            return [engraving_preview.PreviewArtifact(page=1, svg="<svg><text>warn</text></svg>")], False
+
+    monkeypatch.setattr("app.main.preview_service", StubService())
+
+    from app.services.score_validation import ValidationDiagnostics
+
+    monkeypatch.setattr(
+        "app.main.validate_score_diagnostics",
+        lambda score: ValidationDiagnostics(fatal=[], warnings=["Soprano strong-beat note 0 (F#4) conflicts with chord in measure 1."]),
+    )
+
+    payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": False, "scale": 42}
+    res = client.post("/api/engrave/preview", json=payload)
+
+    assert res.status_code == 200
+    assert res.json()["artifacts"][0]["svg"].startswith("<svg")
+    assert res.json()["warnings"]
+
+
+def test_preview_endpoint_fails_with_fatal_diagnostics(monkeypatch):
+    satb = harmonize_score(_melody_score())
+    from app.services.score_validation import ValidationDiagnostics
+
+    monkeypatch.setattr(
+        "app.main.validate_score_diagnostics",
+        lambda score: ValidationDiagnostics(fatal=["Measure 1 voice soprano has 3 beats; expected 4."], warnings=[]),
+    )
+
+    payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": False, "scale": 42}
+    res = client.post("/api/engrave/preview", json=payload)
+
+    assert res.status_code == 422

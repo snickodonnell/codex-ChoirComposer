@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 from app.models import CanonicalScore, VoiceName
 from app.services.music_theory import NOTE_TO_SEMITONE, VOICE_RANGES, VOICE_TESSITURA, normalize_note_name, parse_key, pitch_to_midi, triad_pitch_classes
 
 MAX_MELODIC_LEAP = 7
+
+
+@dataclass
+class ValidationDiagnostics:
+    fatal: list[str]
+    warnings: list[str]
+
+
+def _is_warning_diagnostic(message: str) -> bool:
+    warning_prefixes = (
+        "Soprano strong-beat note",
+        "Chord ",
+        "Potential parallel",
+        "Wide spacing",
+    )
+    warning_fragments = (
+        "is outside chord tones",
+        "leap too large",
+        "in extreme tessitura",
+        "out of range",
+    )
+    return message.startswith(warning_prefixes) or any(fragment in message for fragment in warning_fragments)
 
 
 def beats_per_measure(time_signature: str) -> float:
@@ -14,6 +37,11 @@ def beats_per_measure(time_signature: str) -> float:
 
 
 def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> list[str]:
+    report = validate_score_diagnostics(score, primary_mode)
+    return [*report.fatal, *report.warnings]
+
+
+def validate_score_diagnostics(score: CanonicalScore, primary_mode: str | None = None) -> ValidationDiagnostics:
     errors: list[str] = []
     effective_mode = primary_mode if primary_mode is not None else score.meta.primary_mode
     target = beats_per_measure(score.meta.time_signature)
@@ -34,7 +62,9 @@ def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> li
     if score.meta.stage == "satb":
         errors.extend(_validate_voice_separation(score))
 
-    return errors
+    fatal = [error for error in errors if not _is_warning_diagnostic(error)]
+    warnings = [error for error in errors if _is_warning_diagnostic(error)]
+    return ValidationDiagnostics(fatal=fatal, warnings=warnings)
 
 
 def _flatten_voice(score: CanonicalScore, voice: VoiceName):

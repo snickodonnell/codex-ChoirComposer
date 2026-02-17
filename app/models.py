@@ -221,6 +221,7 @@ class CanonicalScore(BaseModel):
 
 class MelodyResponse(BaseModel):
     score: CanonicalScore
+    warnings: list[str] = Field(default_factory=list)
 
 
 class RefineRequest(BaseModel):
@@ -267,6 +268,7 @@ class EngravingPreviewResponse(BaseModel):
     preview_mode: Literal["melody", "satb"]
     cache_hit: bool
     artifacts: list[EngravingPreviewArtifact]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ClientLogEvent(BaseModel):
