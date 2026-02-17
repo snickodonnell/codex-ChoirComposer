@@ -33,6 +33,7 @@ class _ClusterExportPlan:
     exported_measures: list[int]
     stacked_lyrics: dict[tuple[int, int], list[tuple[int, "ScoreNote"]]]
     headers_by_measure: dict[int, str]
+    new_system_measures: set[int]
 
 
 def export_musicxml(score: CanonicalScore) -> str:
@@ -84,6 +85,9 @@ def export_musicxml(score: CanonicalScore) -> str:
                     ),
                 ]
             )
+
+        if measure.number in cluster_plan.new_system_measures:
+            lines.append('      <print new-system="yes"/>')
 
         if measure.number in cluster_plan.headers_by_measure:
             header = cluster_plan.headers_by_measure[measure.number]
@@ -227,9 +231,15 @@ def _collect_breath_mark_positions(score: CanonicalScore) -> set[tuple[int, int]
 def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
     measure_numbers = [m.number for m in score.measures]
     if not score.meta.arrangement_music_units:
-        return _ClusterExportPlan(exported_measures=measure_numbers, stacked_lyrics={}, headers_by_measure={})
+        return _ClusterExportPlan(
+            exported_measures=measure_numbers,
+            stacked_lyrics={},
+            headers_by_measure={},
+            new_system_measures={1} if measure_numbers else set(),
+        )
 
     section_order = [section.id for section in score.sections]
+    section_by_id = {section.id: section for section in score.sections}
     unit_by_section = {
         f"sec-{unit.arrangement_index + 1}": unit for unit in score.meta.arrangement_music_units if unit.arrangement_index >= 0
     }
@@ -240,11 +250,13 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
     exported_sections: set[str] = set()
     cluster_anchor: dict[str, str] = {}
     cluster_verses: dict[str, list[tuple[int, str]]] = {}
+    section_headers: dict[str, str] = {}
 
     for section_id in section_order:
         unit = unit_by_section.get(section_id)
         if unit is None:
             exported_sections.add(section_id)
+            section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else section_id
             continue
 
         anchor_section = cluster_anchor.get(unit.cluster_id)
@@ -268,6 +280,7 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
             reason="structure_mismatch_note_counts_or_syllable_mapping",
         )
         exported_sections.add(section_id)
+        section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else f"{unit.cluster_id} Verse {unit.verse_index}"
 
     exported_measures = sorted({n for sid in exported_sections for n in spans.get(sid, [])})
     if not exported_measures:
@@ -275,6 +288,7 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
 
     stacked_lyrics: dict[tuple[int, int], list[tuple[int, "ScoreNote"]]] = {}
     headers_by_measure: dict[int, str] = {}
+    new_system_measures: set[int] = set()
     for cluster_id, verses in cluster_verses.items():
         ordered_verses = sorted(verses, key=lambda pair: pair[0])
         if not ordered_verses:
@@ -285,6 +299,7 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
             continue
 
         first_measure = anchor_positions[0][0]
+        new_system_measures.add(first_measure)
         if len(ordered_verses) > 1:
             verse_numbers = ", ".join(f"Verse {verse_index}" for verse_index, _ in ordered_verses)
             headers_by_measure[first_measure] = f"{cluster_id} ({verse_numbers})"
@@ -301,7 +316,20 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
             if entries:
                 stacked_lyrics[(measure_number, note_index)] = entries
 
-    return _ClusterExportPlan(exported_measures=exported_measures, stacked_lyrics=stacked_lyrics, headers_by_measure=headers_by_measure)
+    for section_id, header in section_headers.items():
+        section_measures = sorted(spans.get(section_id, []))
+        if not section_measures:
+            continue
+        first_measure = section_measures[0]
+        new_system_measures.add(first_measure)
+        headers_by_measure.setdefault(first_measure, header)
+
+    return _ClusterExportPlan(
+        exported_measures=exported_measures,
+        stacked_lyrics=stacked_lyrics,
+        headers_by_measure=headers_by_measure,
+        new_system_measures=new_system_measures,
+    )
 
 
 def _section_measure_spans(score: CanonicalScore) -> dict[str, set[int]]:
