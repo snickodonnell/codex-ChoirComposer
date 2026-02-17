@@ -1160,6 +1160,14 @@ def _count_full_measures_for_section(score: CanonicalScore, section_id: str, bea
     return int(total_beats // beat_cap)
 
 
+def _count_section_measures_by_allocation(score: CanonicalScore, section_id: str) -> int:
+    return sum(
+        1
+        for measure in score.measures
+        if any(note.section_id == section_id for note in measure.voices["soprano"])
+    )
+
+
 def _strip_leading_pickup_rests(notes: list[ScoreNote], pickup_beats: float) -> list[ScoreNote]:
     if pickup_beats <= 1e-9:
         return [note.model_copy(deep=True) for note in notes]
@@ -1694,8 +1702,22 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
             section_pickup = section_by_id[section_id].anacrusis_beats if section_id in section_by_id else 0.0
             source_notes = _strip_leading_pickup_rests(source_notes, section_pickup)
+            before_beats = sum(note.beats for note in source_notes)
+            before_measures = int(math.ceil(before_beats / beat_cap - 1e-9)) if before_beats > 1e-9 else 0
             capacities = [max(0.0, beat_cap - section_pickup)] + [beat_cap] * max(0, planned_measure_count - 1)
             constrained = _enforce_section_measure_capacities(section_id=section_id, notes=source_notes, capacities=capacities)
+            after_beats = sum(note.beats for note in constrained)
+            after_measures = int(math.ceil(after_beats / beat_cap - 1e-9)) if after_beats > 1e-9 else 0
+            padding_beats_added = max(0.0, after_beats - before_beats)
+            log_event(
+                logger,
+                "verse_projection_capacity_enforced",
+                section_id=section_id,
+                expected_measures=planned_measure_count,
+                before_measures=before_measures,
+                after_measures=after_measures,
+                padding_beats_added=padding_beats_added,
+            )
             if section_pickup > 1e-9:
                 rebuilt_soprano.append(
                     ScoreNote(
@@ -1722,8 +1744,8 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         verse_sections = [section.id for section in score.sections if section.is_verse]
         expected_count = score.meta.verse_music_unit_form.total_measure_count
         for section_id in verse_sections[1:]:
-            actual = _count_full_measures_for_section(score, section_id, beat_cap)
-            if actual != expected_count:
+            actual = _count_section_measures_by_allocation(score, section_id)
+            if actual > expected_count:
                 log_event(
                     logger,
                     "verse_form_measure_mismatch",

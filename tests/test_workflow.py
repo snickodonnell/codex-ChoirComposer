@@ -251,19 +251,112 @@ def test_generate_melody_amazing_grace_respects_16_bars_per_verse_and_stacks_to_
     assert score["meta"]["verse_music_unit_form"]["bars_per_verse"] == 16
 
     def full_measures(section_id: str) -> int:
-        total_beats = 0.0
-        for measure in score["measures"]:
-            total_beats += sum(
-                note["beats"]
-                for note in measure["voices"]["soprano"]
-                if note["section_id"] == section_id and not note["is_rest"]
-            )
-        return int(total_beats // 4)
+        return sum(
+            1
+            for measure in score["measures"]
+            if any(note["section_id"] == section_id for note in measure["voices"]["soprano"])
+        )
 
     assert full_measures("sec-1") == 16
     assert full_measures("sec-3") == 16
     assert full_measures("sec-5") == 16
 
+
+
+
+def test_generate_melody_34_pickup_shorter_later_verse_is_padded_to_expected_measure_count():
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Grace still leads me home",
+            },
+            {
+                "id": "v3",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Through many dangers toils and snares\nI have already come",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v3", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+        ],
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+
+    assert res.status_code == 200
+    score = res.json()["score"]
+
+    def measures_for(section_id: str) -> int:
+        return sum(
+            1
+            for measure in score["measures"]
+            if any(note["section_id"] == section_id for note in measure["voices"]["soprano"])
+        )
+
+    assert measures_for("sec-1") == 16
+    assert measures_for("sec-2") == 16
+    assert measures_for("sec-3") == 16
+
+
+
+def test_generate_melody_34_manual_pickup_amazing_grace_three_verses_stays_at_16_measures_each():
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Twas grace that taught my heart to fear\nAnd grace my fears relieved",
+            },
+            {
+                "id": "v3",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Through many dangers toils and snares\nI have already come",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v3", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+        ],
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+
+    assert res.status_code == 200
+    score = res.json()["score"]
+
+    def measures_for(section_id: str) -> int:
+        return sum(
+            1
+            for measure in score["measures"]
+            if any(note["section_id"] == section_id for note in measure["voices"]["soprano"])
+        )
+
+    assert measures_for("sec-1") == 16
+    assert measures_for("sec-2") == 16
+    assert measures_for("sec-3") == 16
 
 def test_generate_melody_34_manual_pickup_enforces_exact_verse_measure_structure():
     payload = {
