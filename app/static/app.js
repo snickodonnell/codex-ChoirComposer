@@ -335,6 +335,55 @@ function showErrors(errors) {
   }
 }
 
+function getRequestIdFromHeaders(headers) {
+  if (!headers) return null;
+  if (typeof headers.get === 'function') {
+    return headers.get('X-Request-ID') || headers.get('x-request-id');
+  }
+  if (typeof headers === 'object') {
+    return headers['X-Request-ID'] || headers['x-request-id'] || null;
+  }
+  return null;
+}
+
+function formatApiErrorMessage(error) {
+  const data = error?.response?.data;
+  let message = null;
+
+  if (data && typeof data === 'object') {
+    if (typeof data.message === 'string' && data.message.trim()) {
+      message = data.message;
+    } else if (typeof data.detail === 'string' && data.detail.trim()) {
+      message = data.detail;
+    } else if (typeof data.error === 'string' && data.error.trim()) {
+      message = data.error;
+    } else if (Array.isArray(data.detail)) {
+      message = data.detail
+        .map((d) => {
+          if (typeof d === 'string') return d;
+          if (!d || typeof d !== 'object') return JSON.stringify(d);
+          const loc = Array.isArray(d.loc) ? d.loc.join('.') : 'request';
+          const detailMessage = typeof d.msg === 'string' ? d.msg : JSON.stringify(d);
+          return `${loc}: ${detailMessage}`;
+        })
+        .join(' | ');
+    } else {
+      try {
+        message = JSON.stringify(data);
+      } catch (_) {
+        message = String(data);
+      }
+    }
+  }
+
+  if (!message) {
+    message = error?.message ? String(error.message) : String(error);
+  }
+
+  const requestId = error?.request_id || getRequestIdFromHeaders(error?.response?.headers) || (data && typeof data === 'object' ? data.request_id : null);
+  return requestId ? `${message} (request_id: ${requestId})` : message;
+}
+
 function getSectionRows() {
   return [...sectionsEl.querySelectorAll('.section-row')];
 }
@@ -1297,18 +1346,51 @@ async function post(url, payload) {
   }
   if (!res.ok) {
     const text = await res.text();
-    let message = text;
+    let data = null;
     try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed.detail)) {
-        message = parsed.detail.map(d => `${d.loc?.join('.') || 'request'}: ${d.msg}`).join(' | ');
-      } else if (parsed.detail) {
-        message = parsed.detail;
-      }
+      data = text ? JSON.parse(text) : null;
     } catch (_) {
-      // keep raw text
+      data = null;
     }
-    throw new Error(message);
+
+    const requestIdFromHeader = res.headers.get('X-Request-ID');
+    const requestIdFromBody = typeof data === 'object' && data !== null ? data.request_id : null;
+    const requestId = requestIdFromHeader || requestIdFromBody || null;
+
+    let message = 'Request failed.';
+    if (data && typeof data === 'object') {
+      if (typeof data.message === 'string' && data.message.trim()) {
+        message = data.message;
+      } else if (typeof data.detail === 'string' && data.detail.trim()) {
+        message = data.detail;
+      } else if (typeof data.error === 'string' && data.error.trim()) {
+        message = data.error;
+      } else if (Array.isArray(data.detail)) {
+        message = data.detail
+          .map((d) => {
+            if (typeof d === 'string') return d;
+            if (!d || typeof d !== 'object') return JSON.stringify(d);
+            const loc = Array.isArray(d.loc) ? d.loc.join('.') : 'request';
+            const detailMessage = typeof d.msg === 'string' ? d.msg : JSON.stringify(d);
+            return `${loc}: ${detailMessage}`;
+          })
+          .join(' | ');
+      } else {
+        try {
+          message = JSON.stringify(data);
+        } catch (_) {
+          message = String(data);
+        }
+      }
+    } else if (text?.trim()) {
+      message = text;
+    }
+
+    const fullMessage = requestId ? `${message} (request_id: ${requestId})` : message;
+    const error = new Error(fullMessage);
+    error.response = { data, status: res.status, headers: res.headers };
+    error.request_id = requestId;
+    throw error;
   }
   return res;
 }
@@ -1426,7 +1508,7 @@ generateMelodyBtn.onclick = async () => {
     res = await post('/api/generate-melody', payload);
   } catch (error) {
     if (error?.isValidationError) return;
-    showErrors([String(error.message || error)]);
+    showErrors([formatApiErrorMessage(error)]);
     return;
   }
   const score = (await res.json()).score;
