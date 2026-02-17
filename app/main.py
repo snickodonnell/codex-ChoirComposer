@@ -101,6 +101,25 @@ def _require_valid_score(score, action: str) -> list[str]:
     return report.warnings
 
 
+def _evaluate_melody_validation_gate(score) -> list[str]:
+    report = validate_score_diagnostics(normalize_score_for_rendering(score))
+    preview_diagnostics = [*report.fatal, *report.warnings][:3]
+    will_return_status = 422 if report.fatal else 200
+    log_event(
+        logger,
+        "melody_validation_gate_decision",
+        fatal_count=len(report.fatal),
+        warning_count=len(report.warnings),
+        will_return_status=will_return_status,
+        diagnostics_preview=preview_diagnostics,
+    )
+    if report.fatal:
+        raise _friendly_validation_error("Melody generation", report.fatal, level=logging.ERROR)
+    if report.warnings:
+        log_event(logger, "validation_failed", level=logging.WARNING, action="Melody generation", diagnostics=report.warnings)
+    return report.warnings
+
+
 def _extract_melody_from_satb(score):
     melody = score.model_copy(deep=True)
     melody.meta = melody.meta.model_copy(update={"stage": "melody"})
@@ -150,7 +169,7 @@ def generate_melody_endpoint(payload: CompositionRequest):
     )
     try:
         score = normalize_score_for_rendering(generate_melody_score(payload))
-        warnings = _require_valid_score(score, "Melody generation")
+        warnings = _evaluate_melody_validation_gate(score)
         return MelodyResponse(score=score, warnings=warnings)
     except MelodyGenerationFailedError as exc:
         log_event(
