@@ -124,6 +124,43 @@ def test_export_musicxml_stacks_cluster_verses_on_single_notation_block():
     assert "<text>Amazing</text>" in xml
     assert "<text>Graceful</text>" in xml
     assert "<words>Verse (Verse 1, Verse 2)</words>" in xml
+    assert "<print new-system=\"yes\"/>" in xml
+
+
+def test_export_musicxml_starts_new_system_for_each_cluster_music_unit():
+    score = CanonicalScore(
+        meta=ScoreMeta(
+            key="C",
+            time_signature="4/4",
+            tempo_bpm=90,
+            style="Hymn",
+            stage="satb",
+            rationale="test",
+            arrangement_music_units=[
+                ArrangementMusicUnit(arrangement_index=0, cluster_id="Verse", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=1, cluster_id="Verse", verse_index=2),
+                ArrangementMusicUnit(arrangement_index=2, cluster_id="Chorus", verse_index=1),
+            ],
+        ),
+        sections=[
+            ScoreSection(id="sec-1", label="Verse 1", lyrics="Amazing", syllables=[]),
+            ScoreSection(id="sec-2", label="Verse 2", lyrics="Graceful", syllables=[]),
+            ScoreSection(id="sec-3", label="Chorus", lyrics="Hallelujah", syllables=[]),
+        ],
+        measures=[
+            _build_satb_measure(1, "sec-1", "Amazing", beats=4.0),
+            _build_satb_measure(2, "sec-2", "Graceful", beats=4.0),
+            _build_satb_measure(3, "sec-3", "Hallelujah", beats=4.0),
+        ],
+        chord_progression=[],
+    )
+
+    xml = export_musicxml(score)
+
+    assert xml.count("<measure number=") == 2
+    assert xml.count("<print new-system=\"yes\"/>") == 2
+    assert "<words>Verse (Verse 1, Verse 2)</words>" in xml
+    assert "<words>Chorus</words>" in xml
 
 
 def test_export_musicxml_falls_back_to_duplicate_notation_when_cluster_structure_differs(caplog):
