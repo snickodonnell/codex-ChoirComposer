@@ -75,6 +75,49 @@ def test_generate_melody_returns_warning_payload_without_failing(monkeypatch):
     assert res.status_code == 200
     assert warning in res.json()["warnings"]
 
+
+def test_generate_melody_34_manual_pickup_bars_per_verse_16_phrase_barline_warning_does_not_422(monkeypatch):
+    phrase_warning = "Lyric phrase ending at syllable sec-1-syl-8 ends at beat 7, not on a barline."
+
+    def _warning_only_diagnostics(*_args, **_kwargs):
+        return ValidationDiagnostics(fatal=[], warnings=[phrase_warning])
+
+    monkeypatch.setattr(main_module, "validate_score_diagnostics", _warning_only_diagnostics)
+
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Twas grace that taught my heart to fear\nAnd grace my fears relieved",
+            },
+            {
+                "id": "v3",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Through many dangers toils and snares\nI have already come",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v3", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+        ],
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+
+    assert res.status_code == 200
+    assert phrase_warning in res.json()["warnings"]
+
 def test_compose_end_score_endpoint_runs_full_workflow():
     req = _sample_request()
 

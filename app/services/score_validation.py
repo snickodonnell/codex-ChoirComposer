@@ -23,6 +23,7 @@ def _is_warning_diagnostic(message: str) -> bool:
         "Wide spacing",
     )
     warning_fragments = (
+        "Lyric phrase ending",
         "is outside chord tones",
         "leap too large",
         "in extreme tessitura",
