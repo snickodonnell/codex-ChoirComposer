@@ -215,10 +215,16 @@ def regenerate_melody_endpoint(payload: RegenerateRequest):
 def generate_satb_endpoint(payload: HarmonizeRequest):
     try:
         _require_score_stage(payload.score, "melody", "SATB generation")
-        _require_valid_score(payload.score, "SATB generation")
-        log_event(logger, "draft_version_operation", operation="create", target="satb")
+        melody_warnings = _require_valid_score(payload.score, "SATB generation")
         score = normalize_score_for_rendering(harmonize_score(payload.score))
-        return SATBResponse(score=score, harmonization_notes="Chord-led SATB voicing with diatonic progression integrity checks.")
+        satb_warnings = _require_valid_score(score, "SATB generation")
+        warnings = list(dict.fromkeys([*melody_warnings, *satb_warnings]))
+        log_event(logger, "draft_version_operation", operation="create", target="satb")
+        return SATBResponse(
+            score=score,
+            harmonization_notes="Chord-led SATB voicing with diatonic progression integrity checks.",
+            warnings=warnings,
+        )
     except ValueError as exc:
         raise _handle_user_error("SATB generation", exc) from exc
 

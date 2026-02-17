@@ -281,16 +281,32 @@ def test_generate_melody_logs_final_failure_event(caplog, monkeypatch):
     assert event.final_exception_type == "ScoreValidationError"
     assert event.final_diagnostics == diagnostics[:10]
 
+def test_generate_satb_returns_warning_payload_without_failing(monkeypatch):
+    melody = generate_melody_score(_sample_request())
+    warning = "Soprano strong-beat note 0 (F#4) conflicts with chord in measure 1."
+
+    monkeypatch.setattr(main_module, "validate_score_diagnostics", lambda *_args, **_kwargs: ValidationDiagnostics(fatal=[], warnings=[warning]))
+
+    res = client.post("/api/generate-satb", json={"score": melody.model_dump()})
+
+    assert res.status_code == 200
+    assert warning in res.json()["warnings"]
+
+
 def test_validation_failure_logs_event(caplog, monkeypatch):
     melody = generate_melody_score(_sample_request())
 
     monkeypatch.setattr(main_module, "validate_score_diagnostics", lambda *_args, **_kwargs: ValidationDiagnostics(fatal=["diagnostic: timing mismatch"], warnings=[]))
 
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.INFO):
         res = client.post("/api/generate-satb", json={"score": melody.model_dump()})
 
     assert res.status_code == 422
     assert any(getattr(record, "event", "") == "validation_failed" for record in caplog.records)
+    assert not any(
+        getattr(record, "event", "") == "draft_version_operation" and getattr(record, "operation", "") == "create" and getattr(record, "target", "") == "satb"
+        for record in caplog.records
+    )
 
 
 def test_client_log_endpoint_records_playback_events(caplog):

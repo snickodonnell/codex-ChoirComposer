@@ -234,6 +234,7 @@ class RegenerateRequest(BaseModel):
 class SATBResponse(BaseModel):
     score: CanonicalScore
     harmonization_notes: str
+    warnings: list[str] = Field(default_factory=list)
 
 
 class EndScoreResponse(BaseModel):
