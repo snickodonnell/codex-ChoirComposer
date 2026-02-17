@@ -192,10 +192,17 @@ def _is_strong_beat(beat_pos: float, beats_per_bar: float) -> bool:
     return any(abs(pos - strong) < 1e-9 for strong in _strong_beat_positions(beats_per_bar))
 
 
-def _phrase_target_total_beats(phrase: list[ScoreSyllable], beats_per_bar: float) -> float:
+def _phrase_target_total_beats(phrase: list[ScoreSyllable], beats_per_bar: float, start_offset: float = 0.0) -> float:
     min_beats_needed = 0.5 * len(phrase)
-    target_bars = max(1, math.ceil(min_beats_needed / beats_per_bar))
-    return target_bars * beats_per_bar
+    target = min_beats_needed
+    if beats_per_bar <= 0:
+        return max(1.0, math.ceil(target))
+
+    end_pos = start_offset + target
+    remainder = end_pos % beats_per_bar
+    if abs(remainder) > 1e-9:
+        target += beats_per_bar - remainder
+    return max(target, beats_per_bar if min_beats_needed > beats_per_bar else target)
 
 
 def _base_syllable_options(
@@ -274,8 +281,9 @@ def _search_phrase_template(
     beats_per_bar: float,
     config: RhythmPolicyConfig,
     rng: random.Random,
+    start_offset: float = 0.0,
 ) -> list[tuple[list[float], list[str]]]:
-    target_total = _phrase_target_total_beats(phrase, beats_per_bar)
+    target_total = _phrase_target_total_beats(phrase, beats_per_bar, start_offset)
     candidates: list[list[tuple[list[float], list[str]]]] = []
     search_budget = 48
 
@@ -336,6 +344,7 @@ def plan_syllable_rhythm(
     beats_per_bar: float,
     config: RhythmPolicyConfig,
     seed: str,
+    initial_offset_beats: float = 0.0,
 ) -> list[dict]:
     """Deterministic prosody-aware rhythm planning that preserves lyric phrase boundaries at barlines."""
     rng = random.Random(seed)
@@ -351,9 +360,10 @@ def plan_syllable_rhythm(
     if current_phrase:
         phrases.append(current_phrase)
 
+    running_offset = initial_offset_beats
     for phrase in phrases:
         phrase_plan: list[dict] = []
-        phrase_template = _search_phrase_template(phrase, beats_per_bar, config, rng)
+        phrase_template = _search_phrase_template(phrase, beats_per_bar, config, rng, running_offset)
 
         for idx, syl in enumerate(phrase):
             durations, modes = phrase_template[idx]
@@ -370,5 +380,6 @@ def plan_syllable_rhythm(
             )
 
         plans.extend(phrase_plan)
+        running_offset += sum(sum(item["durations"]) for item in phrase_plan)
 
     return plans

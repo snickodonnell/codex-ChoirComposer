@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import CompositionPreferences, CompositionRequest, LyricSection
+from app.models import ArrangementItem, CompositionPreferences, CompositionRequest, LyricSection
 from app.services import engraving_preview
 from app.services.composer import generate_melody_score, harmonize_score
 
@@ -52,3 +52,22 @@ def test_preview_endpoint_returns_svg_artifacts_and_cache_flag(monkeypatch):
     assert first.json()["cache_hit"] is False
     assert second.json()["cache_hit"] is True
     assert first.json()["artifacts"][0]["svg"].startswith("<svg")
+
+
+def test_preview_endpoint_accepts_pickup_enabled_score(monkeypatch):
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="glory forever rising now")],
+        arrangement=[ArrangementItem(section_id="verse-1", anacrusis_mode="manual", anacrusis_beats=1)],
+        preferences=CompositionPreferences(key="D", time_signature="4/4", tempo_bpm=90),
+    )
+    satb = harmonize_score(generate_melody_score(req))
+
+    class StubService:
+        def render_preview(self, score, options):
+            return [engraving_preview.PreviewArtifact(page=1, svg="<svg><text>pickup</text></svg>")], False
+
+    monkeypatch.setattr("app.main.preview_service", StubService())
+    payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": False, "scale": 42}
+    res = client.post("/api/engrave/preview", json=payload)
+    assert res.status_code == 200
+    assert res.json()["artifacts"][0]["svg"].startswith("<svg")

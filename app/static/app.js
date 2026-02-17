@@ -707,6 +707,45 @@ function derivePhraseBlocksFromText(text) {
   return blocks;
 }
 
+
+function countPhraseBlockSyllables(phraseBlocks) {
+  return phraseBlocks
+    .flatMap((block) => (block.text || '').split(/\s+/))
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .reduce((sum, token) => sum + token.split('-').filter(Boolean).length, 0);
+}
+
+function recommendAnacrusisBeats(phraseBlocks) {
+  const { beatsPerMeasure } = parseTimeSignature(document.getElementById('time').value || '4/4');
+  const syllables = countPhraseBlockSyllables(phraseBlocks);
+  if (syllables < 7 || beatsPerMeasure <= 0) return 0;
+  const remainder = syllables % Math.round(beatsPerMeasure);
+  if (remainder === 1) return 1;
+  if (beatsPerMeasure >= 4 && remainder === 3 && syllables >= 11) return 1;
+  return 0;
+}
+
+function refreshArrangementAnacrusisUI(item) {
+  const phraseBlocks = getArrangementItemPhraseBlocks(item);
+  const recommended = recommendAnacrusisBeats(phraseBlocks);
+  const modeSelect = item.querySelector('.arrangement-anacrusis-mode');
+  const beatsInput = item.querySelector('.arrangement-anacrusis-beats');
+  const recommendationEl = item.querySelector('.arrangement-anacrusis-recommendation');
+  if (!modeSelect || !beatsInput || !recommendationEl) return;
+
+  recommendationEl.textContent = recommended > 0
+    ? `Auto recommendation: ${recommended} beat pickup (stable for unchanged inputs).`
+    : 'Auto recommendation: no pickup (preferred; stable for unchanged inputs).';
+
+  const mode = modeSelect.value || 'off';
+  const manualMode = mode === 'manual';
+  beatsInput.disabled = !manualMode;
+  beatsInput.value = manualMode
+    ? (beatsInput.value || `${recommended || 1}`)
+    : `${recommended}`;
+}
+
 function renderPhraseBlocksEditor(item, phraseBlocks) {
   const host = item.querySelector('.arrangement-phrase-blocks');
   if (!host) return;
@@ -741,7 +780,7 @@ function getArrangementItemPhraseBlocks(item) {
     .filter((block) => block.text.trim().length > 0);
 }
 
-function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = null, phraseBlocks = null) {
+function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = null, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0) {
   if (!sectionId) return;
   const normalizedPause = pauseBeats ?? 0;
   const section = getSectionLibrary().find((entry) => entry.id === sectionId);
@@ -759,6 +798,18 @@ function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = n
       <label>Pause after section (beats)
         <input class="arrangement-pause-beats" type="number" min="0" max="4" step="0.5" value="${normalizedPause}" />
       </label>
+      <label>Anacrusis handling
+        <select class="arrangement-anacrusis-mode">
+          <option value="off">Off (default)</option>
+          <option value="auto">Auto recommend</option>
+          <option value="manual">Manual pickup</option>
+        </select>
+      </label>
+      <label>Anacrusis beats (before section downbeat)
+        <input class="arrangement-anacrusis-beats" type="number" min="0" max="3.5" step="0.5" value="0" disabled />
+      </label>
+      <div class="arrangement-anacrusis-help">Pickup creates a short first bar for this section instance; phrase ends still align to barlines.</div>
+      <div class="arrangement-anacrusis-recommendation"></div>
       <div class="arrangement-phrase-blocks"></div>
     </div>
     <div class="arrangement-item-controls">
@@ -769,6 +820,11 @@ function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = n
   `;
   arrangementListEl.appendChild(item);
   renderPhraseBlocksEditor(item, resolvedPhraseBlocks);
+  const modeSelect = item.querySelector('.arrangement-anacrusis-mode');
+  const beatsInput = item.querySelector('.arrangement-anacrusis-beats');
+  if (modeSelect) modeSelect.value = anacrusisMode || 'off';
+  if (beatsInput) beatsInput.value = Number(anacrusisBeats) || 0;
+  refreshArrangementAnacrusisUI(item);
   refreshArrangementLabels();
 }
 
@@ -934,6 +990,10 @@ arrangementListEl.addEventListener('input', (event) => {
   if (target.classList.contains('arrangement-progression-cluster')) {
     refreshRegenerateClusterOptions();
   }
+  if (target.classList.contains('arrangement-anacrusis-mode') || target.classList.contains('arrangement-anacrusis-beats')) {
+    const arrangementItem = target.closest('.arrangement-item');
+    if (arrangementItem) refreshArrangementAnacrusisUI(arrangementItem);
+  }
 });
 
 function collectPayload() {
@@ -946,6 +1006,8 @@ function collectPayload() {
     section_id: item.dataset.sectionId,
     pause_beats: Number(item.querySelector('.arrangement-pause-beats')?.value) || 0,
     progression_cluster: item.querySelector('.arrangement-progression-cluster')?.value.trim() || null,
+    anacrusis_mode: item.querySelector('.arrangement-anacrusis-mode')?.value || 'off',
+    anacrusis_beats: Number(item.querySelector('.arrangement-anacrusis-beats')?.value) || 0,
     phrase_blocks: getArrangementItemPhraseBlocks(item),
   }));
 
@@ -1342,6 +1404,9 @@ function syncSatbStageForActiveMelody() {
 
 document.getElementById('addSection').onclick = () => addSectionRow();
 document.getElementById('addArrangementItem').onclick = () => addArrangementItem(arrangementSectionSelectEl.value);
+document.getElementById('time').addEventListener('input', () => {
+  [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item) => refreshArrangementAnacrusisUI(item));
+});
 if (loadTestDataBtn) loadTestDataBtn.onclick = loadHymnTestData;
 
 loadHymnTestData();

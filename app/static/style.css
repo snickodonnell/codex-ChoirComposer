@@ -29,6 +29,9 @@ button:hover { background: #1e40af; }
 .arrangement-item-main { display: flex; flex-direction: column; gap: .35rem; }
 .arrangement-item-main label { margin-bottom: 0; font-size: .8rem; color: #334155; }
 .arrangement-item-main input { max-width: 120px; }
+.arrangement-anacrusis-recommendation { font-size: .75rem; color: #1d4ed8; }
+.arrangement-anacrusis-help { font-size: .74rem; color: #334155; }
+.arrangement-item-main select { max-width: 180px; }
 .arrangement-item-controls { display: flex; gap: .35rem; }
 .arrangement-item-controls button { background: #475569; margin-right: 0; padding: .3rem .55rem; }
 .arrangement-item-controls button:hover { background: #334155; }

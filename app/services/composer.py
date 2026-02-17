@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import hashlib
 
 from app.logging_utils import log_event
 
@@ -218,7 +219,7 @@ def _build_section_progression(scale, section_id: str, start_measure: int, measu
 def _apply_phrase_cadential_bias(
     chords: list[ScoreChord],
     sections: list[ScoreSection],
-    section_plans: list[tuple[str, str, str, list[dict]]],
+    section_plans: list[tuple[str, str, str, float, list[dict]]],
     beat_cap: float,
     key: str,
     primary_mode: str | None,
@@ -235,11 +236,12 @@ def _apply_phrase_cadential_bias(
 
     phrase_end_measures: dict[str, list[int]] = {}
     cursor = 0.0
-    for section_id, _label, _cluster, rhythm_plan in section_plans:
+    for section_id, _label, _cluster, pickup_beats, rhythm_plan in section_plans:
         section = section_by_id.get(section_id)
         if section is None:
             continue
         phrase_end_ids = {syllable.id for syllable in section.syllables if syllable.phrase_end_after}
+        cursor += pickup_beats
         for item in rhythm_plan:
             cursor += sum(item["durations"])
             if item["syllable_id"] not in phrase_end_ids:
@@ -316,7 +318,7 @@ def _repair_harmony_progression(chords: list[ScoreChord], measure_count: int, ke
 
     return sorted(repaired, key=lambda c: c.measure_number)
 
-def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float, list[PhraseBlock]]]:
+def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float, str, float, list[PhraseBlock]]]:
     section_defs = {}
     for idx, section in enumerate(req.sections, start=1):
         section_key = section.id or f"section-{idx}"
@@ -329,13 +331,15 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
                 section.label,
                 section.label,
                 section.pause_beats,
+                "off",
+                0.0,
                 [PhraseBlock(text=line.strip(), must_end_at_barline=True, breath_after_phrase=False, merge_with_next_phrase=False) for line in section.text.splitlines() if line.strip()]
                 or [PhraseBlock(text=section.text, must_end_at_barline=True, breath_after_phrase=False, merge_with_next_phrase=False)],
             )
             for idx, section in enumerate(req.sections, start=1)
         ]
 
-    expanded: list[tuple[str, str, str, float, list[PhraseBlock]]] = []
+    expanded: list[tuple[str, str, str, float, str, float, list[PhraseBlock]]] = []
     for item in req.arrangement:
         section = section_defs.get(item.section_id)
         if section is None:
@@ -347,9 +351,42 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
         ]
         if not phrase_blocks:
             phrase_blocks = [PhraseBlock(text=section.text, must_end_at_barline=True, breath_after_phrase=False, merge_with_next_phrase=False)]
-        expanded.append((item.section_id, section.label, item.progression_cluster or section.label, item.pause_beats, phrase_blocks))
+        expanded.append((
+            item.section_id,
+            section.label,
+            item.progression_cluster or section.label,
+            item.pause_beats,
+            item.anacrusis_mode,
+            item.anacrusis_beats,
+            phrase_blocks,
+        ))
 
     return expanded
+
+
+def _recommend_anacrusis_beats(syllable_count: int, beat_cap: float) -> float:
+    if syllable_count < 7 or beat_cap <= 0:
+        return 0.0
+    remainder = syllable_count % int(beat_cap)
+    if remainder == 1:
+        return 1.0
+    if beat_cap >= 4 and remainder == 3 and syllable_count >= 11:
+        return 1.0
+    return 0.0
+
+
+def _stable_pickup_seed(*, section_id: str, section_label: str, rhythm_seed: str, progression_cluster: str, mode: str) -> str:
+    raw = f"{section_id}|{section_label}|{progression_cluster}|{mode}|{rhythm_seed}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_anacrusis_beats(mode: str, configured_beats: float, syllable_count: int, beat_cap: float, *, seed: str) -> float:
+    if mode == "manual":
+        return max(0.0, min(configured_beats, max(0.0, beat_cap - 0.5)))
+    if mode == "auto":
+        _ = seed
+        return _recommend_anacrusis_beats(syllable_count, beat_cap)
+    return 0.0
 
 def _repair_missing_chords(score: CanonicalScore, primary_mode: str | None) -> None:
     if not score.measures:
@@ -420,9 +457,9 @@ def _auto_repair_melody_score(score: CanonicalScore, primary_mode: str | None) -
     return normalize_score_for_rendering(score)
 
 
-def _repair_phrase_end_barlines(score: CanonicalScore) -> None:
+def _repair_phrase_end_barlines(score: CanonicalScore) -> bool:
     if score.meta.stage != "melody":
-        return
+        return False
 
     beat_cap = beats_per_measure(score.meta.time_signature)
     phrase_end_ids = {
@@ -432,7 +469,7 @@ def _repair_phrase_end_barlines(score: CanonicalScore) -> None:
         if syllable.phrase_end_after and syllable.must_end_at_barline
     }
     if not phrase_end_ids:
-        return
+        return False
 
     soprano_notes = _flatten_voice(score, "soprano")
     last_index_by_syllable: dict[str, int] = {}
@@ -467,7 +504,7 @@ def _repair_phrase_end_barlines(score: CanonicalScore) -> None:
         cursor = end_pos
 
     if not repairs:
-        return
+        return False
 
     score.measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, score.meta.time_signature)
     score.chord_progression = _repair_harmony_progression(
@@ -483,6 +520,7 @@ def _repair_phrase_end_barlines(score: CanonicalScore) -> None:
         repaired_phrase_count=len(repairs),
         diagnostics=repairs,
     )
+    return True
 
 
 def _measure_count_by_section(score: CanonicalScore) -> dict[str, int]:
@@ -565,26 +603,24 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     random.seed(base_seed if attempt_number == 0 else f"{base_seed}-attempt-{attempt_number}")
 
     sections: list[ScoreSection] = []
-    section_plans: list[tuple[str, str, str, list[dict]]] = []
+    section_plans: list[tuple[str, str, str, float, list[dict]]] = []
     beat_cap = beats_per_measure(ts)
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
 
-    for idx, (arranged_section_id, section_label, progression_cluster, arranged_pause_beats, phrase_blocks) in enumerate(arranged_instances, start=1):
+    for idx, (
+        arranged_section_id,
+        section_label,
+        progression_cluster,
+        arranged_pause_beats,
+        anacrusis_mode,
+        configured_anacrusis_beats,
+        phrase_blocks,
+    ) in enumerate(arranged_instances, start=1):
         section = section_defs[arranged_section_id]
         section_id = f"sec-{idx}"
         syllables = tokenize_phrase_blocks(section_id, phrase_blocks)
-        sections.append(
-            ScoreSection(
-                id=section_id,
-                label=section_label,
-                pause_beats=arranged_pause_beats,
-                lyrics=section.text,
-                syllables=syllables,
-            )
-        )
-
         rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section_label)
         rhythm_seed = (
             f"{key}|{ts}|{tempo}|{req.preferences.style}|{section_label}|"
@@ -592,14 +628,54 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         )
         if attempt_number > 0:
             rhythm_seed = f"{rhythm_seed}|attempt-{attempt_number}"
-        rhythm_plan = plan_syllable_rhythm(syllables, beat_cap, rhythm_config, rhythm_seed)
-        section_plans.append((section_id, section_label, progression_cluster, rhythm_plan))
+        pickup_seed = _stable_pickup_seed(
+            section_id=section_id,
+            section_label=section_label,
+            rhythm_seed=rhythm_seed,
+            progression_cluster=progression_cluster,
+            mode=anacrusis_mode,
+        )
+        anacrusis_beats = _resolve_anacrusis_beats(
+            anacrusis_mode,
+            configured_anacrusis_beats,
+            len(syllables),
+            beat_cap,
+            seed=pickup_seed,
+        )
+        rhythm_plan = plan_syllable_rhythm(
+            syllables,
+            beat_cap,
+            rhythm_config,
+            rhythm_seed,
+            initial_offset_beats=anacrusis_beats,
+        )
+        sections.append(
+            ScoreSection(
+                id=section_id,
+                label=section_label,
+                pause_beats=arranged_pause_beats,
+                anacrusis_beats=anacrusis_beats,
+                lyrics=section.text,
+                syllables=syllables,
+            )
+        )
+        log_event(
+            logger,
+            "pickup_resolution",
+            section_id=section_id,
+            pickup_mode=anacrusis_mode,
+            pickup_requested_beats=configured_anacrusis_beats,
+            pickup_resolved_beats=anacrusis_beats,
+            effective_first_measure_capacity=max(0.0, beat_cap - anacrusis_beats),
+            pickup_seed=pickup_seed,
+        )
+        section_plans.append((section_id, section_label, progression_cluster, anacrusis_beats, rhythm_plan))
 
     chord_progression: list[ScoreChord] = []
     cluster_cycles: dict[str, list[int]] = {}
     beat_cursor = 0.0
-    for section_id, _label, progression_cluster, rhythm_plan in section_plans:
-        total_beats = sum(sum(item["durations"]) for item in rhythm_plan)
+    for section_id, _label, progression_cluster, anacrusis_beats, rhythm_plan in section_plans:
+        total_beats = anacrusis_beats + sum(sum(item["durations"]) for item in rhythm_plan)
         start_measure = int(beat_cursor // beat_cap) + 1
         end_measure = int(max(beat_cursor + total_beats - 1e-9, beat_cursor) // beat_cap) + 1
         section_measures = max(1, end_measure - start_measure + 1)
@@ -618,6 +694,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         req.preferences.primary_mode,
     )
     chord_by_measure = {ch.measure_number: ch for ch in chord_progression}
+    log_event(logger, "pickup_compensation_strategy", strategy="full_bar_padding", section_count=len(section_plans))
 
     soprano_notes: list[ScoreNote] = []
     cursor = 0.0
@@ -627,10 +704,23 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     }
     tonic_stable_tones = set(triad_pitch_classes(scale, 1))
 
-    for section_id, label, _progression_cluster, rhythm_plan in section_plans:
+    for section_id, label, progression_cluster, anacrusis_beats, rhythm_plan in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
         previous_sung = next((n for n in reversed(soprano_notes) if not n.is_rest), None)
         prev = center if previous_sung is None else pitch_to_midi(previous_sung.pitch)
+
+        if anacrusis_beats > 0:
+            pickup_measure = int(cursor // beat_cap) + 1
+            cycle = cluster_cycles.get(progression_cluster, [])
+            if cycle:
+                pickup_degree = 5 if cycle[0] == 1 else cycle[0]
+                pickup_chord = chord_by_measure.get(pickup_measure)
+                if pickup_chord and pickup_chord.section_id == section_id:
+                    pickup_chord.degree = pickup_degree
+                    pickup_chord.symbol = chord_symbol(scale, pickup_degree)
+                    pickup_chord.pitch_classes = triad_pitch_classes(scale, pickup_degree)
+            soprano_notes.append(ScoreNote(pitch="REST", beats=anacrusis_beats, is_rest=True, section_id=section_id))
+            cursor += anacrusis_beats
 
         for item in rhythm_plan:
             step_base = random.choice([-2, -1, 0, 1, 2, 3])
@@ -696,6 +786,14 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         measures=measures,
         chord_progression=chord_progression,
     )
+    pickup_repair = _repair_phrase_end_barlines(score)
+    if pickup_repair:
+        log_event(
+            logger,
+            "pickup_phrase_boundary_enforcement",
+            repaired=pickup_repair,
+            reason="phrase_end_alignment_with_pickup",
+        )
     return score
 
 

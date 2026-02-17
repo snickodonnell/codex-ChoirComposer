@@ -27,6 +27,7 @@ def validate_score(score: CanonicalScore, primary_mode: str | None = None) -> li
     errors.extend(_validate_chord_progression(score, effective_mode))
     errors.extend(_validate_lyric_mapping(score))
     errors.extend(_validate_phrase_barline_alignment(score))
+    errors.extend(_validate_pickup_measure_capacities(score))
     errors.extend(_validate_ranges_and_motion(score))
     errors.extend(_validate_harmonic_integrity(score))
 
@@ -167,6 +168,51 @@ def _validate_phrase_barline_alignment(score: CanonicalScore) -> list[str]:
             errors.append(
                 f"Lyric phrase ending at syllable {syllable_id} ends at beat {end_pos:g}, not on a barline."
             )
+
+    return errors
+
+
+def _validate_pickup_measure_capacities(score: CanonicalScore) -> list[str]:
+    errors: list[str] = []
+    beat_cap = beats_per_measure(score.meta.time_signature)
+    section_pickups = {section.id: section.anacrusis_beats for section in score.sections if section.anacrusis_beats > 0}
+    if not section_pickups:
+        return errors
+
+    voices: list[VoiceName] = ["soprano", "alto", "tenor", "bass"]
+    for section_id, pickup_beats in section_pickups.items():
+        expected_first_capacity = max(0.0, beat_cap - pickup_beats)
+        for voice in voices:
+            first_measure_number = None
+            first_measure_nonpickup = 0.0
+            subsequent_nonpickup_by_measure: dict[int, float] = {}
+            for measure in score.measures:
+                nonpickup = sum(
+                    note.beats
+                    for note in measure.voices.get(voice, [])
+                    if note.section_id == section_id and not note.is_rest
+                )
+                if nonpickup <= 1e-9:
+                    continue
+                if first_measure_number is None:
+                    first_measure_number = measure.number
+                    first_measure_nonpickup = nonpickup
+                    continue
+                subsequent_nonpickup_by_measure[measure.number] = nonpickup
+
+            if first_measure_number is None:
+                continue
+
+            if abs(first_measure_nonpickup - expected_first_capacity) > 1e-6:
+                errors.append(
+                    f"Section {section_id} voice {voice} first measure non-pickup beats {first_measure_nonpickup:g} != expected {expected_first_capacity:g}."
+                )
+
+            for measure_number, nonpickup in sorted(subsequent_nonpickup_by_measure.items()):
+                if abs(nonpickup - beat_cap) > 1e-6:
+                    errors.append(
+                        f"Section {section_id} voice {voice} measure {measure_number} non-pickup beats {nonpickup:g} != expected full {beat_cap:g}."
+                    )
 
     return errors
 
