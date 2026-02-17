@@ -187,6 +187,7 @@ class ScoreMeta(BaseModel):
 class VerseMusicUnitForm(BaseModel):
     music_unit_id: str = Field(min_length=1, max_length=80)
     pickup_beats: float = Field(default=0, ge=0, le=4)
+    bars_per_verse: int = Field(ge=1)
     total_measure_count: int = Field(ge=1)
     phrase_end_syllable_indices: list[int] = Field(default_factory=list)
     phrase_bar_targets: list[int] = Field(default_factory=list)
