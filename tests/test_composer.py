@@ -804,6 +804,27 @@ def _assert_measure_complete(score):
             assert sum(note.beats for note in notes) == pytest.approx(target), f"m{measure.number} {voice} not measure-complete"
 
 
+def test_cluster_repeat_arrangement_builds_music_unit_verse_indices():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse 1", text="Morning glory rises forever"),
+            LyricSection(id="c", label="Chorus", text="Sing praise"),
+            LyricSection(id="v2", label="Verse 2", text="Mercy carries every broken heart"),
+        ],
+        arrangement=[
+            {"section_id": "v1", "progression_cluster": "Verse"},
+            {"section_id": "c", "progression_cluster": "Chorus"},
+            {"section_id": "v2", "progression_cluster": "Verse"},
+        ],
+        preferences=CompositionPreferences(time_signature="3/4", key="C", tempo_bpm=92, lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+
+    assert [u.cluster_id for u in melody.meta.arrangement_music_units] == ["Verse", "Chorus", "Verse"]
+    assert [u.verse_index for u in melody.meta.arrangement_music_units] == [1, 1, 2]
+
+
 def test_cluster_repeat_arrangement_normalizes_measures_and_harmony_coverage():
     req = CompositionRequest(
         sections=[

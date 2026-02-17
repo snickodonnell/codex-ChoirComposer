@@ -40,3 +40,24 @@ def test_export_musicxml_includes_breath_mark_without_extra_duration():
 
     assert xml.count("<breath-mark/>") == 1
     assert "<bar-style>" not in xml
+
+
+def test_export_musicxml_includes_arrangement_music_unit_mapping_comments():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse 1", text="Amazing grace how sweet"),
+            LyricSection(id="v2", label="Verse 2", text="That saved a soul like me"),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1", progression_cluster="Verse"),
+            ArrangementItem(section_id="v2", progression_cluster="Verse"),
+        ],
+        preferences=CompositionPreferences(key="G", time_signature="4/4", tempo_bpm=88),
+    )
+
+    satb = harmonize_score(generate_melody_score(req))
+    xml = export_musicxml(satb)
+
+    assert "<!-- arrangement-music-units -->" in xml
+    assert "arrangement_index=0,cluster_id=Verse,verse_index=1" in xml
+    assert "arrangement_index=1,cluster_id=Verse,verse_index=2" in xml

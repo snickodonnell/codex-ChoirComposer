@@ -8,6 +8,7 @@ import hashlib
 from app.logging_utils import log_event
 
 from app.models import (
+    ArrangementMusicUnit,
     CanonicalScore,
     CompositionRequest,
     PhraseBlock,
@@ -419,6 +420,22 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, st
     return expanded
 
 
+def _build_arrangement_music_units(arranged_instances: list[tuple[str, str, str, str, float, list[PhraseBlock]]]) -> list[ArrangementMusicUnit]:
+    verse_counts: dict[str, int] = {}
+    music_units: list[ArrangementMusicUnit] = []
+    for arrangement_index, (_, _section_label, progression_cluster, _mode, _beats, _phrases) in enumerate(arranged_instances):
+        verse_index = verse_counts.get(progression_cluster, 0) + 1
+        verse_counts[progression_cluster] = verse_index
+        music_units.append(
+            ArrangementMusicUnit(
+                arrangement_index=arrangement_index,
+                cluster_id=progression_cluster,
+                verse_index=verse_index,
+            )
+        )
+    return music_units
+
+
 def _recommend_anacrusis_beats(syllable_count: int, beat_cap: float) -> float:
     if syllable_count < 7 or beat_cap <= 0:
         return 0.0
@@ -712,6 +729,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
+    arrangement_music_units = _build_arrangement_music_units(arranged_instances)
 
     for idx, (
         arranged_section_id,
@@ -916,6 +934,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             style=req.preferences.style,
             stage="melody",
             rationale="Deterministic lyric-to-rhythm mapping with section-wise diatonic chord progression as harmonic authority.",
+            arrangement_music_units=arrangement_music_units,
         ),
         sections=sections,
         measures=measures,
