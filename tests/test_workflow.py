@@ -84,7 +84,7 @@ def test_refine_endpoint_accepts_cluster_regenerate_payload():
             "score": melody.model_dump(),
             "instruction": "fresh melodic idea",
             "regenerate": True,
-            "selected_clusters": ["verse"],
+            "selected_units": ["verse"],
             "section_clusters": {"sec-1": "verse"},
         },
     )
@@ -103,7 +103,7 @@ def test_refine_satb_endpoint_accepts_cluster_regenerate_payload():
             "score": satb.model_dump(),
             "instruction": "fresh harmonic voicing",
             "regenerate": True,
-            "selected_clusters": ["verse"],
+            "selected_units": ["verse"],
             "section_clusters": {"sec-1": "verse"},
         },
     )

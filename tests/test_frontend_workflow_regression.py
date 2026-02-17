@@ -172,7 +172,7 @@ def test_loading_seed_data_resets_generated_workflow_state():
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
 
-def test_regenerate_clusters_defaults_to_all_selected_and_melody_generation_still_works():
+def test_regenerate_music_units_defaults_to_all_selected_and_melody_generation_still_works():
     playwright = pytest.importorskip("playwright.sync_api")
 
     with run_app_server() as base_url:

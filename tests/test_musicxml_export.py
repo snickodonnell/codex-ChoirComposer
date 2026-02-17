@@ -49,8 +49,8 @@ def test_export_musicxml_includes_arrangement_music_unit_mapping_comments():
             LyricSection(id="v2", label="Verse 2", text="That saved a soul like me"),
         ],
         arrangement=[
-            ArrangementItem(section_id="v1", progression_cluster="Verse"),
-            ArrangementItem(section_id="v2", progression_cluster="Verse"),
+            ArrangementItem(section_id="v1", is_verse=True),
+            ArrangementItem(section_id="v2", is_verse=True),
         ],
         preferences=CompositionPreferences(key="G", time_signature="4/4", tempo_bpm=88),
     )
@@ -59,8 +59,8 @@ def test_export_musicxml_includes_arrangement_music_unit_mapping_comments():
     xml = export_musicxml(satb)
 
     assert "<!-- arrangement-music-units -->" in xml
-    assert "arrangement_index=0,cluster_id=Verse,verse_index=1" in xml
-    assert "arrangement_index=1,cluster_id=Verse,verse_index=2" in xml
+    assert "arrangement_index=0,music_unit_id=verse,verse_index=1" in xml
+    assert "arrangement_index=1,music_unit_id=verse,verse_index=2" in xml
 
 from app.models import ArrangementMusicUnit, CanonicalScore, ScoreMeasure, ScoreMeta, ScoreNote, ScoreSection
 
@@ -91,7 +91,7 @@ def _build_satb_measure(number: int, section_id: str, lyric: str, beats: float =
     )
 
 
-def test_export_musicxml_stacks_cluster_verses_on_single_notation_block():
+def test_export_musicxml_stacks_multiple_verse_lyrics_on_single_notation_block():
     score = CanonicalScore(
         meta=ScoreMeta(
             key="C",
@@ -101,8 +101,8 @@ def test_export_musicxml_stacks_cluster_verses_on_single_notation_block():
             stage="satb",
             rationale="test",
             arrangement_music_units=[
-                ArrangementMusicUnit(arrangement_index=0, cluster_id="Verse", verse_index=1),
-                ArrangementMusicUnit(arrangement_index=1, cluster_id="Verse", verse_index=2),
+                ArrangementMusicUnit(arrangement_index=0, music_unit_id="Verse", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=1, music_unit_id="Verse", verse_index=2),
             ],
         ),
         sections=[
@@ -127,7 +127,7 @@ def test_export_musicxml_stacks_cluster_verses_on_single_notation_block():
     assert "<print new-system=\"yes\"/>" in xml
 
 
-def test_export_musicxml_starts_new_system_for_each_cluster_music_unit():
+def test_export_musicxml_starts_new_system_for_each_music_unit():
     score = CanonicalScore(
         meta=ScoreMeta(
             key="C",
@@ -137,9 +137,9 @@ def test_export_musicxml_starts_new_system_for_each_cluster_music_unit():
             stage="satb",
             rationale="test",
             arrangement_music_units=[
-                ArrangementMusicUnit(arrangement_index=0, cluster_id="Verse", verse_index=1),
-                ArrangementMusicUnit(arrangement_index=1, cluster_id="Verse", verse_index=2),
-                ArrangementMusicUnit(arrangement_index=2, cluster_id="Chorus", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=0, music_unit_id="Verse", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=1, music_unit_id="Verse", verse_index=2),
+                ArrangementMusicUnit(arrangement_index=2, music_unit_id="Chorus", verse_index=1),
             ],
         ),
         sections=[
@@ -163,7 +163,7 @@ def test_export_musicxml_starts_new_system_for_each_cluster_music_unit():
     assert "<words>Chorus</words>" in xml
 
 
-def test_export_musicxml_falls_back_to_duplicate_notation_when_cluster_structure_differs(caplog):
+def test_export_musicxml_falls_back_to_duplicate_notation_when_music_unit_structure_differs(caplog):
     score = CanonicalScore(
         meta=ScoreMeta(
             key="C",
@@ -173,8 +173,8 @@ def test_export_musicxml_falls_back_to_duplicate_notation_when_cluster_structure
             stage="satb",
             rationale="test",
             arrangement_music_units=[
-                ArrangementMusicUnit(arrangement_index=0, cluster_id="Verse", verse_index=1),
-                ArrangementMusicUnit(arrangement_index=1, cluster_id="Verse", verse_index=2),
+                ArrangementMusicUnit(arrangement_index=0, music_unit_id="Verse", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=1, music_unit_id="Verse", verse_index=2),
             ],
         ),
         sections=[

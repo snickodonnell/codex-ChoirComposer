@@ -29,7 +29,7 @@ CLEFS_BY_STAFF = {
 
 
 @dataclass
-class _ClusterExportPlan:
+class _MusicUnitExportPlan:
     exported_measures: list[int]
     stacked_lyrics: dict[tuple[int, int], list[tuple[int, "ScoreNote"]]]
     headers_by_measure: dict[int, str]
@@ -47,7 +47,7 @@ def export_musicxml(score: CanonicalScore) -> str:
     breath_mark_positions = _collect_breath_mark_positions(score)
 
     arrangement_music_unit_lines = _arrangement_music_unit_comments(score)
-    cluster_plan = _build_cluster_export_plan(score)
+    music_unit_plan = _build_music_unit_export_plan(score)
 
     lines: list[str] = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
@@ -63,7 +63,7 @@ def export_musicxml(score: CanonicalScore) -> str:
         '  <part id="P1">',
     ]
 
-    exported_measure_numbers = set(cluster_plan.exported_measures)
+    exported_measure_numbers = set(music_unit_plan.exported_measures)
     for measure in score.measures:
         if measure.number not in exported_measure_numbers:
             continue
@@ -86,11 +86,11 @@ def export_musicxml(score: CanonicalScore) -> str:
                 ]
             )
 
-        if measure.number in cluster_plan.new_system_measures:
+        if measure.number in music_unit_plan.new_system_measures:
             lines.append('      <print new-system="yes"/>')
 
-        if measure.number in cluster_plan.headers_by_measure:
-            header = cluster_plan.headers_by_measure[measure.number]
+        if measure.number in music_unit_plan.headers_by_measure:
+            header = music_unit_plan.headers_by_measure[measure.number]
             lines.append(
                 "      <direction placement=\"above\"><direction-type>"
                 f"<words>{_escape_xml(header)}</words>"
@@ -109,7 +109,7 @@ def export_musicxml(score: CanonicalScore) -> str:
                 1,
                 divisions,
                 breath_mark_positions,
-                cluster_plan.stacked_lyrics,
+                music_unit_plan.stacked_lyrics,
             )
         )
         lines.extend(_backup_xml(measure_duration))
@@ -141,7 +141,7 @@ def _arrangement_music_unit_comments(score: CanonicalScore) -> list[str]:
     for music_unit in score.meta.arrangement_music_units:
         lines.append(
             "  <!-- arrangement_index="
-            f"{music_unit.arrangement_index},cluster_id={_escape_xml(music_unit.cluster_id)},verse_index={music_unit.verse_index}"
+            f"{music_unit.arrangement_index},music_unit_id={_escape_xml(music_unit.music_unit_id)},verse_index={music_unit.verse_index}"
             " -->"
         )
     return lines
@@ -228,10 +228,10 @@ def _collect_breath_mark_positions(score: CanonicalScore) -> set[tuple[int, int]
     return set(last_note_position_by_syllable.values())
 
 
-def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
+def _build_music_unit_export_plan(score: CanonicalScore) -> _MusicUnitExportPlan:
     measure_numbers = [m.number for m in score.measures]
     if not score.meta.arrangement_music_units:
-        return _ClusterExportPlan(
+        return _MusicUnitExportPlan(
             exported_measures=measure_numbers,
             stacked_lyrics={},
             headers_by_measure={},
@@ -248,8 +248,8 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
     signatures = _section_structure_signatures(score)
 
     exported_sections: set[str] = set()
-    cluster_anchor: dict[str, str] = {}
-    cluster_verses: dict[str, list[tuple[int, str]]] = {}
+    music_unit_anchor: dict[str, str] = {}
+    music_unit_verses: dict[str, list[tuple[int, str]]] = {}
     section_headers: dict[str, str] = {}
 
     for section_id in section_order:
@@ -259,28 +259,28 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
             section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else section_id
             continue
 
-        anchor_section = cluster_anchor.get(unit.cluster_id)
+        anchor_section = music_unit_anchor.get(unit.music_unit_id)
         if anchor_section is None:
-            cluster_anchor[unit.cluster_id] = section_id
-            cluster_verses[unit.cluster_id] = [(unit.verse_index, section_id)]
+            music_unit_anchor[unit.music_unit_id] = section_id
+            music_unit_verses[unit.music_unit_id] = [(unit.verse_index, section_id)]
             exported_sections.add(section_id)
             continue
 
         if signatures.get(anchor_section) == signatures.get(section_id):
-            cluster_verses[unit.cluster_id].append((unit.verse_index, section_id))
+            music_unit_verses[unit.music_unit_id].append((unit.verse_index, section_id))
             continue
 
         log_event(
             logger,
             "musicxml_verse_stacking_fallback",
             level=logging.WARNING,
-            cluster_id=unit.cluster_id,
+            music_unit_id=unit.music_unit_id,
             anchor_section_id=anchor_section,
             fallback_section_id=section_id,
             reason="structure_mismatch_note_counts_or_syllable_mapping",
         )
         exported_sections.add(section_id)
-        section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else f"{unit.cluster_id} Verse {unit.verse_index}"
+        section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else f"{unit.music_unit_id} Verse {unit.verse_index}"
 
     exported_measures = sorted({n for sid in exported_sections for n in spans.get(sid, [])})
     if not exported_measures:
@@ -289,7 +289,7 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
     stacked_lyrics: dict[tuple[int, int], list[tuple[int, "ScoreNote"]]] = {}
     headers_by_measure: dict[int, str] = {}
     new_system_measures: set[int] = set()
-    for cluster_id, verses in cluster_verses.items():
+    for music_unit_id, verses in music_unit_verses.items():
         ordered_verses = sorted(verses, key=lambda pair: pair[0])
         if not ordered_verses:
             continue
@@ -302,9 +302,9 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
         new_system_measures.add(first_measure)
         if len(ordered_verses) > 1:
             verse_numbers = ", ".join(f"Verse {verse_index}" for verse_index, _ in ordered_verses)
-            headers_by_measure[first_measure] = f"{cluster_id} ({verse_numbers})"
+            headers_by_measure[first_measure] = f"{music_unit_id} ({verse_numbers})"
         else:
-            headers_by_measure[first_measure] = cluster_id
+            headers_by_measure[first_measure] = music_unit_id
 
         for note_slot, (measure_number, note_index, _anchor_note) in enumerate(anchor_positions):
             entries: list[tuple[int, "ScoreNote"]] = []
@@ -324,7 +324,7 @@ def _build_cluster_export_plan(score: CanonicalScore) -> _ClusterExportPlan:
         new_system_measures.add(first_measure)
         headers_by_measure.setdefault(first_measure, header)
 
-    return _ClusterExportPlan(
+    return _MusicUnitExportPlan(
         exported_measures=exported_measures,
         stacked_lyrics=stacked_lyrics,
         headers_by_measure=headers_by_measure,
@@ -354,7 +354,7 @@ def _section_structure_signatures(score: CanonicalScore) -> dict[str, tuple]:
         for voice_name in ("soprano", "alto", "tenor", "bass"):
             for note in measure.voices[voice_name]:
                 signatures.setdefault(note.section_id, []).append(
-                    (voice_name, note.pitch, round(note.beats, 6), note.is_rest, note.lyric_mode)
+                    (voice_name, round(note.beats, 6), note.is_rest, note.lyric_mode)
                 )
     return {section_id: tuple(signature) for section_id, signature in signatures.items()}
 

@@ -277,7 +277,7 @@ def _build_section_progression(scale, section_id: str, start_measure: int, measu
 def _apply_phrase_cadential_bias(
     chords: list[ScoreChord],
     sections: list[ScoreSection],
-    section_plans: list[tuple[str, str, str, float, list[dict]]],
+    section_plans: list[tuple[str, str, bool, str, float, list[dict]]],
     beat_cap: float,
     key: str,
     primary_mode: str | None,
@@ -294,7 +294,7 @@ def _apply_phrase_cadential_bias(
 
     phrase_end_measures: dict[str, list[int]] = {}
     cursor = 0.0
-    for section_id, _label, _cluster, pickup_beats, rhythm_plan in section_plans:
+    for section_id, _label, _is_verse, _music_unit_id, pickup_beats, rhythm_plan in section_plans:
         section = section_by_id.get(section_id)
         if section is None:
             continue
@@ -376,7 +376,7 @@ def _repair_harmony_progression(chords: list[ScoreChord], measure_count: int, ke
 
     return sorted(repaired, key=lambda c: c.measure_number)
 
-def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, str, float, list[PhraseBlock]]]:
+def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, bool, str, str, float, list[PhraseBlock]]]:
     section_defs = {}
     for idx, section in enumerate(req.sections, start=1):
         section_key = section.id or f"section-{idx}"
@@ -387,7 +387,8 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, st
             (
                 (section.id or f"section-{idx}"),
                 section.label,
-                section.label,
+                section.is_verse,
+                ("verse" if section.is_verse else section.label),
                 "off",
                 0.0,
                 [PhraseBlock(text=line.strip(), must_end_at_barline=True, breath_after_phrase=False, merge_with_next_phrase=False) for line in section.text.splitlines() if line.strip()]
@@ -396,7 +397,7 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, st
             for idx, section in enumerate(req.sections, start=1)
         ]
 
-    expanded: list[tuple[str, str, str, str, float, list[PhraseBlock]]] = []
+    expanded: list[tuple[str, str, bool, str, str, float, list[PhraseBlock]]] = []
     for item in req.arrangement:
         section = section_defs.get(item.section_id)
         if section is None:
@@ -411,7 +412,8 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, st
         expanded.append((
             item.section_id,
             section.label,
-            item.progression_cluster or section.label,
+            section.is_verse,
+            ("verse" if section.is_verse else (item.progression_cluster or section.label)),
             item.anacrusis_mode,
             item.anacrusis_beats,
             phrase_blocks,
@@ -420,17 +422,19 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, st
     return expanded
 
 
-def _build_arrangement_music_units(arranged_instances: list[tuple[str, str, str, str, float, list[PhraseBlock]]]) -> list[ArrangementMusicUnit]:
-    verse_counts: dict[str, int] = {}
+def _build_arrangement_music_units(arranged_instances: list[tuple[str, str, bool, str, str, float, list[PhraseBlock]]]) -> list[ArrangementMusicUnit]:
+    verse_index = 0
     music_units: list[ArrangementMusicUnit] = []
-    for arrangement_index, (_, _section_label, progression_cluster, _mode, _beats, _phrases) in enumerate(arranged_instances):
-        verse_index = verse_counts.get(progression_cluster, 0) + 1
-        verse_counts[progression_cluster] = verse_index
+    for arrangement_index, (_section_id, section_label, is_verse, music_unit_id, _mode, _beats, _phrases) in enumerate(arranged_instances):
+        current_verse_index = 1
+        if is_verse:
+            verse_index += 1
+            current_verse_index = verse_index
         music_units.append(
             ArrangementMusicUnit(
                 arrangement_index=arrangement_index,
-                cluster_id=progression_cluster,
-                verse_index=verse_index,
+                music_unit_id=music_unit_id,
+                verse_index=current_verse_index,
             )
         )
     return music_units
@@ -447,8 +451,8 @@ def _recommend_anacrusis_beats(syllable_count: int, beat_cap: float) -> float:
     return 0.0
 
 
-def _stable_pickup_seed(*, section_id: str, section_label: str, rhythm_seed: str, progression_cluster: str, mode: str) -> str:
-    raw = f"{section_id}|{section_label}|{progression_cluster}|{mode}|{rhythm_seed}"
+def _stable_pickup_seed(*, section_id: str, section_label: str, rhythm_seed: str, music_unit_id: str, mode: str) -> str:
+    raw = f"{section_id}|{section_label}|{music_unit_id}|{mode}|{rhythm_seed}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -651,23 +655,18 @@ def _measure_count_by_section(score: CanonicalScore) -> dict[str, int]:
     return counts
 
 
-def _regenerate_progression_for_clusters(
+def _regenerate_progression_for_units(
     score: CanonicalScore,
-    section_clusters: dict[str, str],
-    selected_clusters: list[str],
+    selected_units: list[str],
     rng: random.Random,
 ) -> list[ScoreChord]:
     if not score.chord_progression:
         return []
 
     scale = parse_key(score.meta.key, score.meta.primary_mode)
-    requested = {cluster.strip() for cluster in selected_clusters if cluster and cluster.strip()}
-    available = {
-        section_clusters.get(section.id, section.label)
-        for section in score.sections
-        if section_clusters.get(section.id, section.label)
-    }
-    target_clusters = requested or available
+    requested = {unit.strip() for unit in selected_units if unit and unit.strip()}
+    available = {("verse" if section.is_verse else section.label) for section in score.sections}
+    target_units = requested or available
 
     measure_counts = _measure_count_by_section(score)
     regenerated_cycles: dict[str, list[int]] = {}
@@ -675,33 +674,33 @@ def _regenerate_progression_for_clusters(
 
     for section in score.sections:
         section_id = section.id
-        cluster = section_clusters.get(section_id, section.label)
+        unit_id = "verse" if section.is_verse else section.label
         section_chords = [c for c in score.chord_progression if c.section_id == section_id]
         if not section_chords:
             continue
         section_chords = sorted(section_chords, key=lambda chord: chord.measure_number)
         measure_count = measure_counts.get(section_id, len(section_chords))
 
-        if cluster in target_clusters:
-            log_event(logger, "cluster_progression_generation_started", cluster_id=section_id, cluster_name=cluster, measure_count=measure_count)
-            cycle = regenerated_cycles.get(cluster)
+        if unit_id in target_units:
+            log_event(logger, "music_unit_progression_generation_started", section_id=section_id, music_unit_id=unit_id, measure_count=measure_count)
+            cycle = regenerated_cycles.get(unit_id)
             if cycle is None:
-                base_cycle = _cluster_progression_cycle(scale, cluster)
+                base_cycle = _cluster_progression_cycle(scale, unit_id)
                 rotation = rng.randrange(len(base_cycle))
                 cycle = base_cycle[rotation:] + base_cycle[:rotation]
                 if rng.random() > 0.5:
                     cycle = list(reversed(cycle))
-                regenerated_cycles[cluster] = cycle
+                regenerated_cycles[unit_id] = cycle
             start_measure = section_chords[0].measure_number
             regenerated_section = _build_section_progression(scale, section_id, start_measure, measure_count, cycle)
             previous_degrees = [chord.degree for chord in section_chords]
             regenerated_degrees = [chord.degree for chord in regenerated_section]
             if regenerated_degrees == previous_degrees and len(cycle) > 1:
                 shifted_cycle = cycle[1:] + cycle[:1]
-                regenerated_cycles[cluster] = shifted_cycle
+                regenerated_cycles[unit_id] = shifted_cycle
                 regenerated_section = _build_section_progression(scale, section_id, start_measure, measure_count, shifted_cycle)
             regenerated.extend(regenerated_section)
-            log_event(logger, "cluster_progression_generation_completed", cluster_id=section_id, cluster_name=cluster, measure_count=measure_count)
+            log_event(logger, "music_unit_progression_generation_completed", section_id=section_id, music_unit_id=unit_id, measure_count=measure_count)
             continue
 
         regenerated.extend(section_chords)
@@ -724,7 +723,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     random.seed(base_seed if attempt_number == 0 else f"{base_seed}-attempt-{attempt_number}")
 
     sections: list[ScoreSection] = []
-    section_plans: list[tuple[str, str, str, float, list[dict]]] = []
+    section_plans: list[tuple[str, str, bool, str, float, list[dict]]] = []
     beat_cap = beats_per_measure(ts)
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
@@ -734,7 +733,8 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     for idx, (
         arranged_section_id,
         section_label,
-        progression_cluster,
+        is_verse,
+        music_unit_id,
         anacrusis_mode,
         configured_anacrusis_beats,
         phrase_blocks,
@@ -753,7 +753,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             section_id=section_id,
             section_label=section_label,
             rhythm_seed=rhythm_seed,
-            progression_cluster=progression_cluster,
+            music_unit_id=music_unit_id,
             mode=anacrusis_mode,
         )
         anacrusis_beats = _resolve_anacrusis_beats(
@@ -774,6 +774,8 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             ScoreSection(
                 id=section_id,
                 label=section_label,
+                is_verse=is_verse,
+                verse_number=arrangement_music_units[idx - 1].verse_index if idx - 1 < len(arrangement_music_units) else None,
                 anacrusis_beats=anacrusis_beats,
                 lyrics=section.text,
                 syllables=syllables,
@@ -789,17 +791,17 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             effective_first_measure_capacity=max(0.0, beat_cap - anacrusis_beats),
             pickup_seed=pickup_seed,
         )
-        section_plans.append((section_id, section_label, progression_cluster, anacrusis_beats, rhythm_plan))
+        section_plans.append((section_id, section_label, is_verse, music_unit_id, anacrusis_beats, rhythm_plan))
 
     chord_progression: list[ScoreChord] = []
-    cluster_cycles: dict[str, list[int]] = {}
+    music_unit_cycles: dict[str, list[int]] = {}
     beat_cursor = 0.0
-    for section_id, _label, progression_cluster, anacrusis_beats, rhythm_plan in section_plans:
+    for section_id, _label, _is_verse, music_unit_id, anacrusis_beats, rhythm_plan in section_plans:
         total_beats = anacrusis_beats + sum(sum(item["durations"]) for item in rhythm_plan)
         start_measure = int(beat_cursor // beat_cap) + 1
         end_measure = int(max(beat_cursor + total_beats - 1e-9, beat_cursor) // beat_cap) + 1
         section_measures = max(1, end_measure - start_measure + 1)
-        cluster_cycle = cluster_cycles.setdefault(progression_cluster, _cluster_progression_cycle(scale, progression_cluster))
+        cluster_cycle = music_unit_cycles.setdefault(music_unit_id, _cluster_progression_cycle(scale, music_unit_id))
         chord_progression.extend(_build_section_progression(scale, section_id, start_measure, section_measures, cluster_cycle))
         beat_cursor += total_beats
 
@@ -824,7 +826,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     }
     tonic_stable_tones = set(triad_pitch_classes(scale, 1))
 
-    for section_id, label, progression_cluster, anacrusis_beats, rhythm_plan in section_plans:
+    for section_id, label, _is_verse, music_unit_id, anacrusis_beats, rhythm_plan in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
         repeated_pitch_count, previous_pitch = _initial_identical_pitch_run(soprano_notes)
         if previous_pitch is None:
@@ -838,7 +840,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
         if anacrusis_beats > 0:
             pickup_measure = int(cursor // beat_cap) + 1
-            cycle = cluster_cycles.get(progression_cluster, [])
+            cycle = music_unit_cycles.get(music_unit_id, [])
             if cycle:
                 pickup_degree = 5 if cycle[0] == 1 else cycle[0]
                 pickup_chord = chord_by_measure.get(pickup_measure)
@@ -1005,6 +1007,7 @@ def refine_score(
     score: CanonicalScore,
     instruction: str,
     regenerate: bool,
+    selected_units: list[str] | None = None,
     selected_clusters: list[str] | None = None,
     section_clusters: dict[str, str] | None = None,
 ) -> CanonicalScore:
@@ -1012,10 +1015,10 @@ def refine_score(
     rng = random.Random() if regenerate else random.Random(instruction)
     scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
     if regenerate:
-        score.chord_progression = _regenerate_progression_for_clusters(
+        requested_units = selected_units if selected_units is not None else selected_clusters or []
+        score.chord_progression = _regenerate_progression_for_units(
             score,
-            section_clusters or {},
-            selected_clusters or [],
+            requested_units,
             rng,
         )
     progression = {c.measure_number: c for c in score.chord_progression}

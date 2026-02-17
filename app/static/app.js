@@ -327,25 +327,25 @@ function getSectionLibrary() {
   return getSectionRows().map((row) => ({
     id: row.dataset.sectionId,
     label: row.querySelector('.section-label').value.trim(),
+    is_verse: row.querySelector('.section-is-verse')?.checked ?? false,
     text: row.querySelector('.section-text').value,
   }));
 }
 
-function getArrangementClusters() {
+function getArrangementMusicUnits() {
   const sectionById = new Map(getSectionLibrary().map((s) => [s.id, s]));
   const clusters = [];
   [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item) => {
     const section = sectionById.get(item.dataset.sectionId);
     if (!section) return;
-    const clusterInput = item.querySelector('.arrangement-progression-cluster');
-    const cluster = clusterInput?.value.trim() || section.label || 'default';
-    if (!clusters.includes(cluster)) clusters.push(cluster);
+        const unit = section.is_verse ? 'verse' : (section.label || 'default');
+    if (!clusters.includes(unit)) clusters.push(unit);
   });
   return clusters;
 }
 
 function refreshRegenerateClusterOptions() {
-  const clusters = getArrangementClusters();
+  const clusters = getArrangementMusicUnits();
   const selects = [regenerateClustersEl, satbRegenerateClustersEl].filter(Boolean);
 
   selects.forEach((selectEl) => {
@@ -370,13 +370,13 @@ function buildSectionClusterMap(payload) {
       const section = sectionById.get(item.section_id);
       if (!section) return;
       arrangedIndex += 1;
-      mapping[`sec-${arrangedIndex}`] = item.progression_cluster || section.label || 'default';
+      mapping[`sec-${arrangedIndex}`] = section.is_verse ? 'verse' : (section.label || 'default');
     });
     return mapping;
   }
 
   payload.sections.forEach((section, idx) => {
-    mapping[`sec-${idx + 1}`] = section.label || 'default';
+    mapping[`sec-${idx + 1}`] = section.is_verse ? 'verse' : (section.label || 'default');
   });
   return mapping;
 }
@@ -595,7 +595,7 @@ async function refineActiveMelody({ regenerate }) {
   };
 
   if (regenerate) {
-    payload.selected_clusters = [...regenerateClustersEl.selectedOptions].map((o) => o.value);
+    payload.selected_units = [...regenerateClustersEl.selectedOptions].map((o) => o.value);
     payload.section_clusters = currentVersion?.sectionClusterMap || {};
   }
 
@@ -627,7 +627,7 @@ async function refineActiveSatb({ regenerate }) {
     regenerate,
   };
   if (regenerate) {
-    payload.selected_clusters = [...satbRegenerateClustersEl.selectedOptions].map((o) => o.value);
+    payload.selected_units = [...satbRegenerateClustersEl.selectedOptions].map((o) => o.value);
     payload.section_clusters = currentVersion?.sectionClusterMap || {};
   }
 
@@ -671,7 +671,8 @@ function appendDraftVersion(score, sectionClusterMap, label) {
 function describeSection(sectionId) {
   const match = getSectionLibrary().find((s) => s.id === sectionId);
   if (!match) return `Missing section (${sectionId})`;
-  return `${match.label || 'Untitled Label'} (${sectionId})`;
+  const label = match.is_verse ? 'Verse' : (match.label || 'Untitled Label');
+  return `${label} (${sectionId})`;
 }
 
 function refreshArrangementLibrarySelect() {
@@ -779,10 +780,9 @@ function getArrangementItemPhraseBlocks(item) {
     .filter((block) => block.text.trim().length > 0);
 }
 
-function addArrangementItem(sectionId, progressionCluster = null, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0) {
+function addArrangementItem(sectionId, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0) {
   if (!sectionId) return;
   const section = getSectionLibrary().find((entry) => entry.id === sectionId);
-  const clusterValue = progressionCluster || section?.label || 'default';
   const resolvedPhraseBlocks = phraseBlocks || derivePhraseBlocksFromText(section?.text || '');
   const item = document.createElement('div');
   item.className = 'arrangement-item';
@@ -790,9 +790,6 @@ function addArrangementItem(sectionId, progressionCluster = null, phraseBlocks =
   item.innerHTML = `
     <div class="arrangement-item-main">
       <div class="arrangement-item-meta"></div>
-      <label>Progression Cluster
-        <input class="arrangement-progression-cluster" value="${clusterValue}" placeholder="e.g. Verse, Chorus, Bridge" />
-      </label>
       <label>Anacrusis handling
         <select class="arrangement-anacrusis-mode">
           <option value="off">Off (default)</option>
@@ -824,10 +821,17 @@ function addArrangementItem(sectionId, progressionCluster = null, phraseBlocks =
 }
 
 function refreshArrangementLabels() {
+  let verseNumber = 0;
   [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item, idx) => {
     const meta = item.querySelector('.arrangement-item-meta');
     if (!meta) return;
-    meta.textContent = `${idx + 1}. ${describeSection(item.dataset.sectionId)}`;
+    const section = getSectionLibrary().find((entry) => entry.id === item.dataset.sectionId);
+    if (section?.is_verse) {
+      verseNumber += 1;
+      meta.textContent = `${idx + 1}. Verse ${verseNumber}`;
+    } else {
+      meta.textContent = `${idx + 1}. ${describeSection(item.dataset.sectionId)}`;
+    }
   });
   refreshRegenerateClusterOptions();
 }
@@ -841,18 +845,18 @@ function clearSectionsAndArrangement() {
 
 function loadHymnTestData() {
   const sections = [
-    { label: 'verse', text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
-    { label: 'verse', text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
-    { label: 'chorus', text: 'Praise God, praise God\nWe sing with grateful voices' },
+    { label: 'Verse', is_verse: true, text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
+    { label: 'Verse', is_verse: true, text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
+    { label: 'Chorus', is_verse: false, text: 'Praise God, praise God\nWe sing with grateful voices' },
   ];
 
   clearSectionsAndArrangement();
-  sections.forEach((section) => addSectionRow(section.label, section.text));
+  sections.forEach((section) => addSectionRow(section.label, section.text, section.is_verse || false));
 
   const rows = getSectionRows();
-  addArrangementItem(rows[0]?.dataset.sectionId, 'Verse A');
-  addArrangementItem(rows[1]?.dataset.sectionId, 'Verse B');
-  addArrangementItem(rows[2]?.dataset.sectionId, 'Refrain');
+  addArrangementItem(rows[0]?.dataset.sectionId);
+  addArrangementItem(rows[1]?.dataset.sectionId);
+  addArrangementItem(rows[2]?.dataset.sectionId);
 
   document.getElementById('key').value = 'G';
   document.getElementById('primaryMode').value = 'major';
@@ -902,7 +906,7 @@ function setSectionMode(row, isSaved) {
   }
 }
 
-function addSectionRow(defaultLabel = 'verse', text = '') {
+function addSectionRow(defaultLabel = 'verse', text = '', isVerse = false) {
   const row = document.createElement('div');
   row.className = 'section-row';
   row.dataset.sectionId = `section-${++sectionIdCounter}`;
@@ -913,6 +917,7 @@ function addSectionRow(defaultLabel = 'verse', text = '') {
       <button type="button" class="toggle-section-mode">Save section</button>
     </div>
     <label>Section Label <input class="section-label" value="${defaultLabel}" placeholder="e.g. Verse, Chorus, Tag" /></label>
+    <label class="section-verse-toggle"><input type="checkbox" class="section-is-verse" ${isVerse ? 'checked' : ''} /> Verse section</label>
     <label>Lyrics <textarea class="section-text" placeholder="Enter lyrics here">${text}</textarea></label>
   `;
   setSectionMode(row, false);
@@ -950,7 +955,7 @@ sectionsEl.addEventListener('click', (event) => {
 sectionsEl.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  if (target.classList.contains('section-label')) {
+  if (target.classList.contains('section-label') || target.classList.contains('section-is-verse')) {
     refreshArrangementLibrarySelect();
     refreshArrangementLabels();
   }
@@ -982,9 +987,6 @@ arrangementListEl.addEventListener('click', (event) => {
 arrangementListEl.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  if (target.classList.contains('arrangement-progression-cluster')) {
-    refreshRegenerateClusterOptions();
-  }
   if (target.classList.contains('arrangement-anacrusis-mode') || target.classList.contains('arrangement-anacrusis-beats')) {
     const arrangementItem = target.closest('.arrangement-item');
     if (arrangementItem) refreshArrangementAnacrusisUI(arrangementItem);
@@ -999,7 +1001,7 @@ function collectPayload() {
   const arrangementCard = arrangementListEl.closest('.card');
   const arrangement = [...arrangementListEl.querySelectorAll('.arrangement-item')].map((item) => ({
     section_id: item.dataset.sectionId,
-    progression_cluster: item.querySelector('.arrangement-progression-cluster')?.value.trim() || null,
+    is_verse: sectionById.get(item.dataset.sectionId)?.is_verse || false,
     anacrusis_mode: item.querySelector('.arrangement-anacrusis-mode')?.value || 'off',
     anacrusis_beats: Number(item.querySelector('.arrangement-anacrusis-beats')?.value) || 0,
     phrase_blocks: getArrangementItemPhraseBlocks(item),
@@ -1324,7 +1326,7 @@ function updateWorkflowStatus() {
   }
 
   workflowStageLabelEl.textContent = 'Current stage: 1) Lyrics + Structure';
-  workflowStageHintEl.textContent = 'Write lyrics, define section labels, and set arrangement clusters before generating a melody.';
+  workflowStageHintEl.textContent = 'Write lyrics, define section labels, and arrange Verse/non-verse items before generating a melody.';
 }
 
 function updateActionAvailability() {

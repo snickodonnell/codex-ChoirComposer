@@ -13,7 +13,7 @@
       <h1>AI-Assisted Choir Composer</h1>
       <section class="workflow-ribbon" aria-live="polite">
         <strong id="workflowStageLabel">Current stage: 1) Lyrics + Structure</strong>
-        <span id="workflowStageHint">Write lyrics, define section labels, and set arrangement clusters before generating a melody.</span>
+        <span id="workflowStageHint">Write lyrics, mark Verse sections, and set arrangement order before generating a melody.</span>
       </section>
       <section class="card">
         <h2>1) Lyrics + Structure</h2>
@@ -22,7 +22,7 @@
         <button id="loadTestData" type="button">Load Hymn Test Data</button>
         <hr />
         <h3>Arrangement</h3>
-        <p>Build song order by reusing section labels from your section library. Set progression clusters per arrangement item, then review Phrase Blocks (auto-split from lyric line breaks). By default each block ends at a barline; use “merge with next phrase” for run-on phrasing, optionally add a visual breath marker after a phrase, and configure anacrusis (pickup) manually or via stable auto recommendation.</p>
+        <p>Build song order by reusing section labels from your section library. Verse items are auto-numbered by arrangement order and share one Verse music unit. Non-verse sections keep their own labeled music. Review Phrase Blocks (auto-split from lyric line breaks). By default each block ends at a barline; use “merge with next phrase” for run-on phrasing, optionally add a visual breath marker after a phrase, and configure anacrusis (pickup) manually or via stable auto recommendation.</p>
         <div class="arrangement-controls">
           <label>Add section to arrangement
             <select id="arrangementSectionSelect"></select>
@@ -122,7 +122,7 @@
           <button id="regenerate">Regenerate</button>
         </div>
         <div class="actions">
-          <label>Regenerate clusters
+          <label>Regenerate music units
             <select id="regenerateClusters" multiple></select>
           </label>
           <label>Draft version
@@ -161,7 +161,7 @@
           <button id="regenerateSATB">Regenerate</button>
         </div>
         <div class="actions">
-          <label>Regenerate clusters
+          <label>Regenerate music units
             <select id="satbRegenerateClusters" multiple></select>
           </label>
           <label>Draft version

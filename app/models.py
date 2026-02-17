@@ -28,13 +28,19 @@ MODE_FAMILIES = {
 class LyricSection(BaseModel):
     id: str | None = Field(default=None, min_length=1, max_length=120)
     label: SectionLabel = Field(min_length=1, max_length=80)
+    is_verse: bool = False
     text: str = Field(min_length=1)
 
-
+    @model_validator(mode="after")
+    def infer_verse_from_label(self):
+        if not self.is_verse and self.label.strip().lower().startswith("verse"):
+            self.is_verse = True
+        return self
 
 
 class ArrangementItem(BaseModel):
     section_id: str = Field(min_length=1, max_length=120)
+    is_verse: bool | None = None
     progression_cluster: str | None = Field(default=None, min_length=1, max_length=80)
     anacrusis_mode: Literal["off", "auto", "manual"] = "off"
     anacrusis_beats: float = Field(default=0, ge=0, le=4)
@@ -134,6 +140,8 @@ class ScoreSyllable(BaseModel):
 class ScoreSection(BaseModel):
     id: str
     label: SectionLabel = Field(min_length=1, max_length=80)
+    is_verse: bool = False
+    verse_number: int | None = Field(default=None, ge=1)
     anacrusis_beats: float = Field(default=0, ge=0, le=4)
     lyrics: str
     syllables: list[ScoreSyllable]
@@ -176,8 +184,20 @@ class ScoreMeta(BaseModel):
 
 class ArrangementMusicUnit(BaseModel):
     arrangement_index: int = Field(ge=0)
-    cluster_id: str = Field(min_length=1, max_length=80)
-    verse_index: int = Field(ge=1)
+    music_unit_id: str = Field(min_length=1, max_length=80)
+    verse_index: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_cluster_id(cls, data):
+        if isinstance(data, dict) and "music_unit_id" not in data and data.get("cluster_id"):
+            data = dict(data)
+            data["music_unit_id"] = data.get("cluster_id")
+        return data
+
+    @property
+    def cluster_id(self) -> str:
+        return self.music_unit_id
 
 
 class CanonicalScore(BaseModel):
@@ -195,6 +215,7 @@ class RefineRequest(BaseModel):
     score: CanonicalScore
     instruction: str = Field(min_length=3, max_length=300)
     regenerate: bool = False
+    selected_units: list[str] = Field(default_factory=list)
     selected_clusters: list[str] = Field(default_factory=list)
     section_clusters: dict[str, str] = Field(default_factory=dict)
 
