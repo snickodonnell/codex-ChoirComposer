@@ -142,17 +142,18 @@ def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
     expected_ids: dict[str, set[str]] = {s.id: {sy.id for sy in s.syllables} for s in score.sections}
     mapped_ids: dict[str, set[str]] = defaultdict(set)
 
+    lyricless_indices: list[int] = []
     for note_idx, note in enumerate(_flatten_voice(score, "soprano")):
         if note.is_rest:
             continue
 
-        if note.section_id not in expected_ids and note.section_id != "padding":
+        if note.section_id not in expected_ids and note.section_id not in {"padding", "interlude"}:
             errors.append(f"Lyric note references unknown section_id {note.section_id}.")
             continue
 
         is_interlude = note.section_id == "interlude"
         if not is_interlude and note.lyric_syllable_id is None:
-            errors.append(f"Orphan melodic note at index {note_idx} without lyric association.")
+            lyricless_indices.append(note_idx)
             continue
 
         if note.lyric_syllable_id:
@@ -164,6 +165,9 @@ def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
             errors.append(f"Note {note_idx} has continuation mode without syllable id.")
         if note.lyric_mode in {"melisma_continue", "tie_continue"} and note.lyric:
             errors.append(f"Note {note_idx} repeats lyric text on a continuation mode.")
+
+    if lyricless_indices:
+        errors.append(f"Verse contains lyricless notes at indices {lyricless_indices} (outside interlude).")
 
     for section in score.sections:
         missing = expected_ids[section.id] - mapped_ids[section.id]

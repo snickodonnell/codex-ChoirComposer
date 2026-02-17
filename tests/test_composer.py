@@ -386,6 +386,26 @@ def test_each_syllable_text_is_emitted_once_per_syllable_id():
     assert all(count == 1 for count in seen_text_by_syllable_id.values())
 
 
+
+
+def test_lyricless_non_rest_notes_are_reported_with_targeted_diagnostic():
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="Amazing grace")],
+        arrangement=[ArrangementItem(section_id="verse-1")],
+        preferences=CompositionPreferences(time_signature="4/4", key="C"),
+    )
+    melody = generate_melody_score(req)
+
+    for measure in melody.measures:
+        for note in measure.voices["soprano"]:
+            if not note.is_rest:
+                note.lyric_syllable_id = None
+                diagnostics = validate_score(melody)
+                assert any(msg.startswith("Verse contains lyricless notes at indices") for msg in diagnostics)
+                return
+
+    raise AssertionError("Expected at least one non-rest soprano note")
+
 def test_generate_melody_and_satb_validate():
     req = CompositionRequest(
         sections=[LyricSection(label="verse", text="Glory rises in the dawn.")],

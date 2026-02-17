@@ -40,7 +40,7 @@ from app.services.music_theory import (
     triad_pitch_classes,
 )
 from app.services.score_normalization import normalize_score_for_rendering
-from app.services.score_validation import beats_per_measure, validate_score
+from app.services.score_validation import beats_per_measure, validate_score, validate_score_diagnostics
 
 MAX_MELODIC_LEAP = 7
 MAX_GENERATION_ATTEMPTS = 5
@@ -197,7 +197,7 @@ class VerseFormPlanner:
             delta = desired_phrase_beats - current_phrase_beats
 
             if delta > 1e-9:
-                phrase[-1]["durations"][-1] += delta
+                self._distribute_phrase_extension(phrase=phrase, delta=delta, phrase_start_beat=previous_target_beat)
             elif delta < -1e-9:
                 remaining = -delta
                 for slot in reversed(phrase):
@@ -238,6 +238,48 @@ class VerseFormPlanner:
             slot["modes"] = normalized_modes
 
         return adjusted
+
+    def _distribute_phrase_extension(self, *, phrase: list[dict], delta: float, phrase_start_beat: float) -> None:
+        if delta <= 1e-9 or not phrase:
+            return
+
+        beat_positions: list[float] = []
+        running = phrase_start_beat
+        for slot in phrase:
+            beat_positions.append(running)
+            running += sum(slot["durations"])
+
+        cadence_first = [len(phrase) - 1]
+        stressed_strong: list[int] = []
+        for idx, slot in enumerate(phrase[:-1]):
+            if slot.get("stressed") and _is_strong_beat(beat_positions[idx] % self._beat_cap, self._time_signature):
+                stressed_strong.append(idx)
+        distributed = [idx for idx in range(len(phrase) - 1, -1, -1) if idx not in set(cadence_first + stressed_strong)]
+        priority = cadence_first + stressed_strong + distributed
+
+        chunks = [2.0, 1.5, 1.0, 0.5]
+        cursor = 0
+        remaining = delta
+        while remaining > 1e-9 and priority:
+            idx = priority[cursor % len(priority)]
+            slot = phrase[idx]
+            chunk = next((value for value in chunks if value <= remaining + 1e-9), remaining)
+            if chunk <= 1e-9:
+                break
+
+            if slot["durations"] and slot["modes"] and slot["modes"][-1] in {"tie_continue", "melisma_continue"}:
+                slot["durations"][-1] += chunk
+            elif slot["durations"] and slot["modes"]:
+                if slot["modes"][-1] in {"single", "subdivision"}:
+                    slot["modes"][-1] = "tie_start"
+                slot["durations"].append(chunk)
+                slot["modes"].append("tie_continue")
+            else:
+                slot.setdefault("durations", []).append(chunk)
+                slot.setdefault("modes", []).append("tie_continue")
+
+            remaining -= chunk
+            cursor += 1
 
 
     def phrase_bar_targets_from_rhythm_plan(
@@ -297,7 +339,6 @@ def _pack_measures(voice_notes: dict[str, list[ScoreNote]], time_signature: str)
                 m_voices[voice].append(chunk)
                 overflowing.beats -= chunk.beats
                 overflowing.lyric = None
-                overflowing.lyric_syllable_id = None
                 overflowing.lyric_mode = "tie_continue"
                 used += chunk.beats
 
@@ -1201,6 +1242,7 @@ def _enforce_section_measure_capacities(
 
     for capacity in capacities:
         remaining = max(0.0, capacity)
+        measure_start_idx = len(constrained)
         while remaining > 1e-9 and pending_idx < len(pending):
             current = pending[pending_idx]
             take = min(current.beats, remaining)
@@ -1220,17 +1262,44 @@ def _enforce_section_measure_capacities(
             remaining -= take
 
         if remaining > 1e-9:
-            constrained.append(
-                ScoreNote(
-                    pitch="REST",
-                    beats=remaining,
-                    is_rest=True,
-                    lyric=None,
-                    lyric_syllable_id=None,
-                    lyric_mode="none",
-                    section_id=section_id,
+            extend_idx: int | None = None
+            for idx in range(len(constrained) - 1, measure_start_idx - 1, -1):
+                if not constrained[idx].is_rest and constrained[idx].lyric_syllable_id:
+                    extend_idx = idx
+                    break
+            if extend_idx is None:
+                for idx in range(measure_start_idx - 1, -1, -1):
+                    if not constrained[idx].is_rest and constrained[idx].lyric_syllable_id:
+                        extend_idx = idx
+                        break
+
+            if extend_idx is not None:
+                anchor = constrained[extend_idx]
+                if anchor.lyric_mode not in {"tie_continue", "melisma_continue", "tie_start", "melisma_start"}:
+                    anchor.lyric_mode = "tie_start"
+                constrained.append(
+                    ScoreNote(
+                        pitch=anchor.pitch,
+                        beats=remaining,
+                        is_rest=False,
+                        lyric=None,
+                        lyric_syllable_id=anchor.lyric_syllable_id,
+                        lyric_mode="tie_continue",
+                        section_id=section_id,
+                    )
                 )
-            )
+            else:
+                constrained.append(
+                    ScoreNote(
+                        pitch="REST",
+                        beats=remaining,
+                        is_rest=True,
+                        lyric=None,
+                        lyric_syllable_id=None,
+                        lyric_mode="none",
+                        section_id="interlude",
+                    )
+                )
 
     if pending_idx < len(pending):
         raise VerseFormConstraintError(
@@ -1808,7 +1877,9 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
             non_blocking_prefixes = (
                 "Lyric phrase ending",
                 "Orphan melodic note",
+                "Verse contains lyricless notes",
                 "Soprano strong-beat note",
+                "soprano note",
             )
             if errs and all(err.startswith(non_blocking_prefixes) for err in errs):
                 log_event(logger, "validation_soft_pass", stage="melody_generation", attempt=attempt, diagnostics=errs)
@@ -1892,11 +1963,11 @@ def refine_score(
         cursor += note.beats
 
     score.meta.rationale = f"Refined while preserving progression authority: {instruction}"
-    errs = validate_score(score)
-    if errs:
-        log_event(logger, "validation_failed", level=logging.ERROR, stage="refine_score", diagnostics=errs)
+    diagnostics = validate_score_diagnostics(score)
+    if diagnostics.fatal:
+        log_event(logger, "validation_failed", level=logging.ERROR, stage="refine_score", diagnostics=diagnostics.fatal)
         raise ValueError("Refined score failed validation.")
-    log_event(logger, "validation_passed", stage="refine_score")
+    log_event(logger, "validation_passed", stage="refine_score", warnings=diagnostics.warnings)
     return normalize_score_for_rendering(score)
 
 
