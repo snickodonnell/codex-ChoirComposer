@@ -54,6 +54,18 @@ def config_for_preset(preset: LyricRhythmPreset, section_label: SectionLabel) ->
     return base
 
 
+def _scale_rhythm_config(config: RhythmPolicyConfig, length_scale: float) -> RhythmPolicyConfig:
+    scale = max(0.6, min(1.8, length_scale))
+    slower_bias = max(0.0, scale - 1.0)
+    faster_bias = max(0.0, 1.0 - scale)
+    return RhythmPolicyConfig(
+        melismaRate=min(0.75, max(0.02, config.melismaRate + (0.18 * slower_bias) - (0.08 * faster_bias))),
+        subdivisionRate=min(0.5, max(0.02, config.subdivisionRate + (0.16 * faster_bias) - (0.06 * slower_bias))),
+        phraseEndHoldBeats=max(1.0, min(3.0, config.phraseEndHoldBeats * scale)),
+        preferStrongBeatForStress=config.preferStrongBeatForStress,
+    )
+
+
 def split_word_into_syllables(word: str) -> list[str]:
     w = word.lower()
     if len(w) <= 3:
@@ -192,9 +204,14 @@ def _is_strong_beat(beat_pos: float, beats_per_bar: float) -> bool:
     return any(abs(pos - strong) < 1e-9 for strong in _strong_beat_positions(beats_per_bar))
 
 
-def _phrase_target_total_beats(phrase: list[ScoreSyllable], beats_per_bar: float, start_offset: float = 0.0) -> float:
+def _phrase_target_total_beats(
+    phrase: list[ScoreSyllable],
+    beats_per_bar: float,
+    start_offset: float = 0.0,
+    target_scale: float = 1.0,
+) -> float:
     min_beats_needed = 0.5 * len(phrase)
-    target = min_beats_needed
+    target = max(min_beats_needed, min_beats_needed * max(0.6, min(1.8, target_scale)))
     if beats_per_bar <= 0:
         return max(1.0, math.ceil(target))
 
@@ -282,8 +299,9 @@ def _search_phrase_template(
     config: RhythmPolicyConfig,
     rng: random.Random,
     start_offset: float = 0.0,
+    target_scale: float = 1.0,
 ) -> list[tuple[list[float], list[str]]]:
-    target_total = _phrase_target_total_beats(phrase, beats_per_bar, start_offset)
+    target_total = _phrase_target_total_beats(phrase, beats_per_bar, start_offset, target_scale)
     candidates: list[list[tuple[list[float], list[str]]]] = []
     search_budget = 48
 
@@ -345,6 +363,7 @@ def plan_syllable_rhythm(
     config: RhythmPolicyConfig,
     seed: str,
     initial_offset_beats: float = 0.0,
+    length_scale: float = 1.0,
 ) -> list[dict]:
     """Deterministic prosody-aware rhythm planning that preserves lyric phrase boundaries at barlines."""
     rng = random.Random(seed)
@@ -361,9 +380,17 @@ def plan_syllable_rhythm(
         phrases.append(current_phrase)
 
     running_offset = initial_offset_beats
+    scaled_config = _scale_rhythm_config(config, length_scale)
     for phrase in phrases:
         phrase_plan: list[dict] = []
-        phrase_template = _search_phrase_template(phrase, beats_per_bar, config, rng, running_offset)
+        phrase_template = _search_phrase_template(
+            phrase,
+            beats_per_bar,
+            scaled_config,
+            rng,
+            running_offset,
+            length_scale,
+        )
 
         for idx, syl in enumerate(phrase):
             durations, modes = phrase_template[idx]
