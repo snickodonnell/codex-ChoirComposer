@@ -420,6 +420,70 @@ def test_progression_cluster_reuses_single_progression_across_labels_and_repeats
     assert chords_by_section["sec-3"]
 
 
+
+
+def test_phrase_endings_bias_progression_toward_cadence_without_rewriting_entire_cluster():
+    req = CompositionRequest(
+        sections=[LyricSection(id="v", label="Verse", text="Morning light rises\nHope is here")],
+        arrangement=[{"section_id": "v", "pause_beats": 0, "progression_cluster": "Verse"}],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+    section = melody.sections[0]
+    phrase_end_ids = {s.id for s in section.syllables if s.phrase_end_after}
+
+    bpb = beats_per_measure(melody.meta.time_signature)
+    pos = 0.0
+    phrase_end_measures = []
+    last_end_for_syllable = {}
+    soprano = [n for m in melody.measures for n in m.voices["soprano"]]
+    for note in soprano:
+        end_pos = pos + note.beats
+        if not note.is_rest and note.lyric_syllable_id in phrase_end_ids:
+            last_end_for_syllable[note.lyric_syllable_id] = end_pos
+        pos = end_pos
+
+    phrase_end_measures = sorted({int(max(end - 1e-9, 0.0) // bpb) + 1 for end in last_end_for_syllable.values()})
+    chords_by_measure = {ch.measure_number: ch.degree for ch in melody.chord_progression}
+
+    assert phrase_end_measures
+    assert chords_by_measure[phrase_end_measures[-1]] == 1
+    assert any(chords_by_measure[m] == 1 for m in phrase_end_measures)
+    assert any(m - 1 in chords_by_measure and chords_by_measure[m - 1] == 5 for m in phrase_end_measures)
+
+
+def test_phrase_end_soprano_note_lands_on_stable_chord_tone():
+    req = CompositionRequest(
+        sections=[LyricSection(id="v", label="Verse", text="Bless-ed hope\nA-men")],
+        arrangement=[{"section_id": "v", "pause_beats": 0, "progression_cluster": "Verse"}],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=88, lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+    section = melody.sections[0]
+    phrase_end_ids = {s.id for s in section.syllables if s.phrase_end_after}
+
+    bpb = beats_per_measure(melody.meta.time_signature)
+    pos = 0.0
+    last_note_by_phrase_end = {}
+    for note in [n for m in melody.measures for n in m.voices["soprano"]]:
+        if note.is_rest:
+            pos += note.beats
+            continue
+        end_pos = pos + note.beats
+        if note.lyric_syllable_id in phrase_end_ids:
+            last_note_by_phrase_end[note.lyric_syllable_id] = (end_pos, note)
+        pos = end_pos
+
+    chords_by_measure = {ch.measure_number: set(ch.pitch_classes) for ch in melody.chord_progression}
+
+    assert last_note_by_phrase_end
+    for end_pos, note in last_note_by_phrase_end.values():
+        measure_number = int(max(end_pos - 1e-9, 0.0) // bpb) + 1
+        assert pitch_to_midi(note.pitch) % 12 in chords_by_measure[measure_number]
+
+
 def test_regenerate_updates_only_selected_clusters():
     req = CompositionRequest(
         sections=[
