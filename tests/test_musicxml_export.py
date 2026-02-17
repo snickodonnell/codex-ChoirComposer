@@ -192,3 +192,48 @@ def test_export_musicxml_falls_back_to_duplicate_notation_when_music_unit_struct
 
     assert xml.count("<measure number=") == 2
     assert "musicxml_verse_stacking_fallback" in caplog.text
+
+
+def test_export_musicxml_stacks_non_consecutive_verses_with_deterministic_numbering():
+    score = CanonicalScore(
+        meta=ScoreMeta(
+            key="C",
+            time_signature="4/4",
+            tempo_bpm=90,
+            style="Hymn",
+            stage="satb",
+            rationale="test",
+            arrangement_music_units=[
+                ArrangementMusicUnit(arrangement_index=0, music_unit_id="Verse", verse_index=10),
+                ArrangementMusicUnit(arrangement_index=1, music_unit_id="Chorus", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=2, music_unit_id="Verse", verse_index=8),
+                ArrangementMusicUnit(arrangement_index=3, music_unit_id="Chorus", verse_index=1),
+                ArrangementMusicUnit(arrangement_index=4, music_unit_id="Verse", verse_index=3),
+            ],
+        ),
+        sections=[
+            ScoreSection(id="sec-1", label="Verse 1", is_verse=True, lyrics="Amazing", syllables=[]),
+            ScoreSection(id="sec-2", label="Chorus", is_verse=False, lyrics="Sing", syllables=[]),
+            ScoreSection(id="sec-3", label="Verse 2", is_verse=True, lyrics="Grace", syllables=[]),
+            ScoreSection(id="sec-4", label="Chorus", is_verse=False, lyrics="Sing", syllables=[]),
+            ScoreSection(id="sec-5", label="Verse 3", is_verse=True, lyrics="Sound", syllables=[]),
+        ],
+        measures=[
+            _build_satb_measure(1, "sec-1", "Amazing", beats=4.0),
+            _build_satb_measure(2, "sec-2", "Sing", beats=4.0),
+            _build_satb_measure(3, "sec-3", "Grace", beats=4.0),
+            _build_satb_measure(4, "sec-4", "Sing", beats=4.0),
+            _build_satb_measure(5, "sec-5", "Sound", beats=4.0),
+        ],
+        chord_progression=[],
+    )
+
+    xml = export_musicxml(score)
+
+    assert '<lyric number="1">' in xml
+    assert '<lyric number="2">' in xml
+    assert '<lyric number="3">' in xml
+    assert "<text>Amazing</text>" in xml
+    assert "<text>Grace</text>" in xml
+    assert "<text>Sound</text>" in xml
+    assert "<words>Verse (Verse 1, Verse 2, Verse 3)</words>" in xml

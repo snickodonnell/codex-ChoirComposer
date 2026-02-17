@@ -249,7 +249,7 @@ def _build_music_unit_export_plan(score: CanonicalScore) -> _MusicUnitExportPlan
 
     exported_sections: set[str] = set()
     music_unit_anchor: dict[str, str] = {}
-    music_unit_verses: dict[str, list[tuple[int, str]]] = {}
+    music_unit_sections: dict[str, list[str]] = {}
     section_headers: dict[str, str] = {}
 
     for section_id in section_order:
@@ -262,12 +262,12 @@ def _build_music_unit_export_plan(score: CanonicalScore) -> _MusicUnitExportPlan
         anchor_section = music_unit_anchor.get(unit.music_unit_id)
         if anchor_section is None:
             music_unit_anchor[unit.music_unit_id] = section_id
-            music_unit_verses[unit.music_unit_id] = [(unit.verse_index, section_id)]
+            music_unit_sections[unit.music_unit_id] = [section_id]
             exported_sections.add(section_id)
             continue
 
         if signatures.get(anchor_section) == signatures.get(section_id):
-            music_unit_verses[unit.music_unit_id].append((unit.verse_index, section_id))
+            music_unit_sections[unit.music_unit_id].append(section_id)
             continue
 
         log_event(
@@ -289,30 +289,42 @@ def _build_music_unit_export_plan(score: CanonicalScore) -> _MusicUnitExportPlan
     stacked_lyrics: dict[tuple[int, int], list[tuple[int, "ScoreNote"]]] = {}
     headers_by_measure: dict[int, str] = {}
     new_system_measures: set[int] = set()
-    for music_unit_id, verses in music_unit_verses.items():
-        ordered_verses = sorted(verses, key=lambda pair: pair[0])
-        if not ordered_verses:
+    for music_unit_id, stacked_sections in music_unit_sections.items():
+        if not stacked_sections:
             continue
-        anchor_section = ordered_verses[0][1]
+        anchor_section = stacked_sections[0]
         anchor_positions = soprano_positions.get(anchor_section, [])
         if not anchor_positions:
             continue
 
+        ordered_entries = list(enumerate(stacked_sections, start=1))
+        section_is_verse = {section.id: section.is_verse for section in score.sections}
+        is_verse_unit = any(section_is_verse.get(section_id, False) for section_id in stacked_sections) or "verse" in music_unit_id.strip().lower()
+
         first_measure = anchor_positions[0][0]
         new_system_measures.add(first_measure)
-        if len(ordered_verses) > 1:
-            verse_numbers = ", ".join(f"Verse {verse_index}" for verse_index, _ in ordered_verses)
+        if len(ordered_entries) > 1 and is_verse_unit:
+            verse_numbers = ", ".join(f"Verse {verse_number}" for verse_number, _ in ordered_entries)
             headers_by_measure[first_measure] = f"{music_unit_id} ({verse_numbers})"
         else:
             headers_by_measure[first_measure] = music_unit_id
 
         for note_slot, (measure_number, note_index, _anchor_note) in enumerate(anchor_positions):
             entries: list[tuple[int, "ScoreNote"]] = []
-            for verse_index, section_id in ordered_verses:
+            for verse_number, section_id in ordered_entries:
                 section_positions = soprano_positions.get(section_id, [])
                 if note_slot >= len(section_positions):
+                    log_event(
+                        logger,
+                        "musicxml_verse_stacking_fallback",
+                        level=logging.WARNING,
+                        music_unit_id=music_unit_id,
+                        anchor_section_id=anchor_section,
+                        fallback_section_id=section_id,
+                        reason="structure_mismatch_note_slot_out_of_range",
+                    )
                     continue
-                entries.append((verse_index, section_positions[note_slot][2]))
+                entries.append((verse_number, section_positions[note_slot][2]))
             if entries:
                 stacked_lyrics[(measure_number, note_index)] = entries
 
