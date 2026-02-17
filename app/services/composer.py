@@ -778,6 +778,9 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     sections: list[ScoreSection] = []
     section_plans: list[tuple[str, str, bool, str, float, list[dict]]] = []
     beat_cap = beats_per_measure(ts)
+    verse_length_scale = 1.0
+    if req.preferences.bars_per_verse:
+        verse_length_scale = max(0.6, min(1.8, req.preferences.bars_per_verse / 16.0))
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
@@ -825,6 +828,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             rhythm_config,
             rhythm_seed,
             initial_offset_beats=anacrusis_beats,
+            length_scale=verse_length_scale,
         )
 
         if is_verse:

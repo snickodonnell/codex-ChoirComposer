@@ -249,10 +249,12 @@ function validatePreferences() {
   const modeEl = document.getElementById('primaryMode');
   const timeEl = document.getElementById('time');
   const tempoEl = document.getElementById('tempo');
+  const barsPerVerseEl = document.getElementById('barsPerVerse');
   const keyRaw = keyEl.value?.trim() || '';
   const modeRaw = modeEl.value?.trim() || '';
   const timeRaw = timeEl.value?.trim() || '';
   const tempoRaw = tempoEl.value?.trim() || '';
+  const barsPerVerseRaw = barsPerVerseEl.value?.trim() || '';
 
   if (keyRaw) {
     const m = keyRaw.match(/^([A-Ga-g])([#b]?)(m?)$/);
@@ -291,6 +293,13 @@ function validatePreferences() {
     const tempo = Number(tempoRaw);
     if (!Number.isFinite(tempo) || tempo < 30 || tempo > 300) {
       errors.push(createValidationIssue('Tempo must be between 30 and 300 BPM.', tempoEl));
+    }
+  }
+
+  if (barsPerVerseRaw) {
+    const barsPerVerse = Number(barsPerVerseRaw);
+    if (!Number.isInteger(barsPerVerse) || barsPerVerse < 4 || barsPerVerse > 64) {
+      errors.push(createValidationIssue('Bars per Verse must be a whole number between 4 and 64.', barsPerVerseEl));
     }
   }
 
@@ -864,6 +873,7 @@ function loadHymnTestData() {
   document.getElementById('tempo').value = '88';
   document.getElementById('mood').value = 'Prayerful';
   document.getElementById('lyricPreset').value = 'syllabic';
+  document.getElementById('barsPerVerse').value = '16';
   document.getElementById('instruction').value = 'Keep a reverent, singable contour.';
 
   melodyScore = null;
@@ -1044,7 +1054,8 @@ function collectPayload() {
       time_signature: document.getElementById('time').value || null,
       tempo_bpm: document.getElementById('tempo').value ? Number(document.getElementById('tempo').value) : null,
       mood: document.getElementById('mood').value,
-      lyric_rhythm_preset: document.getElementById('lyricPreset').value
+      lyric_rhythm_preset: document.getElementById('lyricPreset').value,
+      bars_per_verse: document.getElementById('barsPerVerse').value ? Number(document.getElementById('barsPerVerse').value) : null,
     }
   };
 }

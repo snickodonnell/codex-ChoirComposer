@@ -73,6 +73,18 @@ def test_rhythm_plan_aligns_line_endings_to_barlines():
     assert all(abs(pos % 4) < 1e-9 for pos in phrase_end_positions)
 
 
+def test_rhythm_plan_length_scale_stretches_total_duration_goal():
+    syllables = tokenize_section_lyrics("sec-1", "amazing grace how sweet the sound that saved a wretch like me")
+    cfg = config_for_preset("mixed", "verse")
+
+    short_plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-scale", length_scale=0.75)
+    long_plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-scale", length_scale=1.5)
+
+    short_total = sum(sum(item["durations"]) for item in short_plan)
+    long_total = sum(sum(item["durations"]) for item in long_plan)
+    assert long_total > short_total
+
+
 def test_rhythm_plan_never_places_next_line_inside_prior_line_measure():
     syllables = tokenize_section_lyrics("sec-1", "kyrie eleison\nchrist have mercy")
     cfg = config_for_preset("mixed", "verse")
@@ -255,6 +267,25 @@ def test_auto_anacrusis_is_deterministic_for_same_request_inputs():
     melody_b = generate_melody_score(req)
 
     assert melody_a.model_dump() == melody_b.model_dump()
+
+
+def test_bars_per_verse_scales_total_melody_length():
+    base_req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="amazing grace how sweet the sound\nthat saved a wretch like me")],
+        arrangement=[ArrangementItem(section_id="verse-1")],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed", key="C", tempo_bpm=88),
+    )
+    short_req = base_req.model_copy(deep=True)
+    short_req.preferences.bars_per_verse = 10
+    long_req = base_req.model_copy(deep=True)
+    long_req.preferences.bars_per_verse = 24
+
+    short_melody = generate_melody_score(short_req)
+    long_melody = generate_melody_score(long_req)
+
+    short_beats = sum(note.beats for measure in short_melody.measures for note in measure.voices["soprano"])
+    long_beats = sum(note.beats for measure in long_melody.measures for note in measure.voices["soprano"])
+    assert long_beats > short_beats
 
 
 def test_phrase_boundary_stays_on_barline_with_manual_pickup_and_no_syllable_bleed():

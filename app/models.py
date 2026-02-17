@@ -62,6 +62,7 @@ class CompositionPreferences(BaseModel):
     style: str = Field(default="Contemporary Worship", min_length=2, max_length=120)
     mood: MoodName = "Uplifting"
     lyric_rhythm_preset: LyricRhythmPreset = "mixed"
+    bars_per_verse: int | None = Field(default=None, ge=4, le=64)
 
     @field_validator("key")
     @classmethod
