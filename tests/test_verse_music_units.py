@@ -147,3 +147,65 @@ def test_musicxml_uses_canonical_verse_notes_with_melisma_for_shorter_third_vers
     assert "<text>toils</text>" in xml
     assert xml.count('<lyric number="3">') >= 2
     assert '<lyric number="3">' in xml and '<extend/>' in xml
+
+
+def test_third_verse_measure_count_matches_first_verse_for_shared_music_unit():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse", is_verse=True, text="Amazing grace how sweet the sound"),
+            LyricSection(id="c", label="Chorus", is_verse=False, text="I once was lost but now am found"),
+            LyricSection(id="v2", label="Verse", is_verse=True, text="Twas grace that taught my heart to fear"),
+            LyricSection(id="v3", label="Verse", is_verse=True, text="And grace my fears relieved"),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v2"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v3"),
+        ],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90),
+    )
+
+    melody = generate_melody_score(req)
+    spans: dict[str, set[int]] = {}
+    for measure in melody.measures:
+        for note in measure.voices["soprano"]:
+            if note.section_id in {"sec-1", "sec-5"}:
+                spans.setdefault(note.section_id, set()).add(measure.number)
+
+    assert len(spans["sec-1"]) == len(spans["sec-5"])
+    assert melody.meta.verse_music_unit_form is not None
+    assert len(spans["sec-1"]) == melody.meta.verse_music_unit_form.total_measure_count
+
+
+def test_commas_in_third_verse_do_not_add_phrase_breaks_or_measures():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse", is_verse=True, text="Amazing grace\nHow sweet the sound"),
+            LyricSection(id="c", label="Chorus", is_verse=False, text="I once was lost but now am found"),
+            LyricSection(id="v2", label="Verse", is_verse=True, text="Grace has kept me through the years"),
+            LyricSection(id="v3", label="Verse", is_verse=True, text="Amazing grace, how sweet, the sound"),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v2"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v3"),
+        ],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90),
+    )
+
+    melody = generate_melody_score(req)
+    verse1_phrase_breaks = [s.id for s in melody.sections[0].syllables if s.phrase_end_after]
+    verse3_phrase_breaks = [s.id for s in melody.sections[4].syllables if s.phrase_end_after]
+
+    assert len(verse3_phrase_breaks) == len(verse1_phrase_breaks)
+
+    spans: dict[str, set[int]] = {}
+    for measure in melody.measures:
+        for note in measure.voices["soprano"]:
+            if note.section_id in {"sec-1", "sec-5"}:
+                spans.setdefault(note.section_id, set()).add(measure.number)
+    assert len(spans["sec-1"]) == len(spans["sec-5"])

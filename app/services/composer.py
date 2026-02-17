@@ -4,6 +4,7 @@ import logging
 import math
 import random
 import hashlib
+import re
 
 from app.logging_utils import log_event
 
@@ -18,6 +19,7 @@ from app.models import (
     ScoreNote,
     ScoreSection,
     ScoreSyllable,
+    VerseMusicUnitForm,
 )
 from app.services.lyric_mapping import (
     section_archetype,
@@ -44,6 +46,10 @@ MAX_GENERATION_ATTEMPTS = 5
 MAX_IDENTICAL_CONSECUTIVE_PITCHES = 3
 
 logger = logging.getLogger(__name__)
+
+
+class VerseFormConstraintError(ValueError):
+    pass
 
 
 def _pack_measures(voice_notes: dict[str, list[ScoreNote]], time_signature: str) -> list[ScoreMeasure]:
@@ -205,6 +211,44 @@ def _phrase_note_totals(rhythm_plan: list[dict], phrase_end_ids: set[str]) -> li
     if running > 0:
         totals.append(running)
     return totals or [1]
+
+
+def _phrase_end_indices_from_phrase_blocks(syllables: list[ScoreSyllable], phrase_blocks: list[PhraseBlock]) -> list[int]:
+    word_re = r"[A-Za-z']+(?:-[A-Za-z']+)*"
+    word_boundaries: list[int] = []
+    running_words = 0
+    for block in phrase_blocks:
+        words = len(re.findall(word_re, block.text))
+        running_words += words
+        if words <= 0 or block.merge_with_next_phrase:
+            continue
+        word_boundaries.append(running_words - 1)
+
+    index_by_word: dict[int, int] = {}
+    for idx, syllable in enumerate(syllables):
+        index_by_word[syllable.word_index] = idx
+    return [index_by_word[word_index] for word_index in word_boundaries if word_index in index_by_word]
+
+
+def _apply_phrase_end_indices(syllables: list[ScoreSyllable], phrase_end_indices: list[int], phrase_blocks: list[PhraseBlock]) -> None:
+    for syllable in syllables:
+        syllable.phrase_end_after = False
+        syllable.breath_after_phrase = False
+
+    phrase_end_set = set(phrase_end_indices)
+    for idx in phrase_end_set:
+        if 0 <= idx < len(syllables):
+            syllables[idx].phrase_end_after = True
+
+    # Preserve explicit breath markers at phrase-block boundaries.
+    block_boundaries = _phrase_end_indices_from_phrase_blocks(syllables, phrase_blocks)
+    breath_boundaries = {
+        boundary for block, boundary in zip(phrase_blocks, block_boundaries, strict=False) if block.breath_after_phrase
+    }
+    for idx in breath_boundaries:
+        if 0 <= idx < len(syllables):
+            syllables[idx].phrase_end_after = True
+            syllables[idx].breath_after_phrase = True
 
 
 
@@ -753,13 +797,17 @@ def _align_verse_syllables_to_template(section_id: str, syllables: list[ScoreSyl
     if len(syllables) == template_count:
         return syllables
     if len(syllables) > template_count:
-        aligned = [s.model_copy(deep=True) for s in syllables[:template_count]]
-        overflow = syllables[template_count - 1 :]
-        aligned[-1].text = " ".join(s.text for s in overflow if s.text).strip() or aligned[-1].text
-        aligned[-1].phrase_end_after = overflow[-1].phrase_end_after
-        aligned[-1].breath_after_phrase = overflow[-1].breath_after_phrase
-        aligned[-1].must_end_at_barline = overflow[-1].must_end_at_barline
-        return aligned
+        if len(syllables) <= template_count + 2:
+            aligned = [s.model_copy(deep=True) for s in syllables[:template_count]]
+            overflow = syllables[template_count - 1 :]
+            aligned[-1].text = " ".join(s.text for s in overflow if s.text).strip() or aligned[-1].text
+            aligned[-1].phrase_end_after = overflow[-1].phrase_end_after
+            aligned[-1].breath_after_phrase = overflow[-1].breath_after_phrase
+            aligned[-1].must_end_at_barline = overflow[-1].must_end_at_barline
+            return aligned
+        raise VerseFormConstraintError(
+            f"Verse form overflow for {section_id}: {len(syllables)} syllables cannot fit canonical {template_count}-slot skeleton"
+        )
 
     aligned = [s.model_copy(deep=True) for s in syllables]
     if aligned:
@@ -811,6 +859,8 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
     verse_rhythm_template: list[dict] | None = None
     verse_template_anacrusis_beats: float | None = None
+    verse_template_phrase_end_indices: list[int] = []
+    verse_music_unit_form: VerseMusicUnitForm | None = None
 
     for idx, (
         arranged_section_id,
@@ -824,6 +874,9 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         section = section_defs[arranged_section_id]
         section_id = f"sec-{idx}"
         syllables = tokenize_phrase_blocks(section_id, phrase_blocks)
+        phrase_end_indices_from_blocks = _phrase_end_indices_from_phrase_blocks(syllables, phrase_blocks)
+        if is_verse and phrase_end_indices_from_blocks:
+            _apply_phrase_end_indices(syllables, phrase_end_indices_from_blocks, phrase_blocks)
         rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section_label)
         rhythm_seed = (
             f"{key}|{ts}|{tempo}|{req.preferences.style}|{section_label}|"
@@ -865,6 +918,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     for item in rhythm_plan
                 ]
                 verse_template_anacrusis_beats = anacrusis_beats
+                verse_template_phrase_end_indices = phrase_end_indices_from_blocks
             elif verse_rhythm_template:
                 try:
                     syllables = _align_verse_syllables_to_template(section_id, syllables, len(verse_rhythm_template))
@@ -879,8 +933,28 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                         reason="syllable_overflow_against_canonical_verse_skeleton",
                     )
                     raise exc
+                _apply_phrase_end_indices(syllables, verse_template_phrase_end_indices, phrase_blocks)
                 anacrusis_beats = verse_template_anacrusis_beats or 0.0
                 rhythm_plan = _project_verse_rhythm_to_template(section_id, syllables, verse_rhythm_template)
+
+            if verse_rhythm_template:
+                total_beats = anacrusis_beats + sum(sum(item["durations"]) for item in rhythm_plan)
+                phrase_bar_targets: list[int] = []
+                running = anacrusis_beats
+                for phrase_end_index in verse_template_phrase_end_indices:
+                    if 0 <= phrase_end_index < len(rhythm_plan):
+                        running = anacrusis_beats + sum(
+                            sum(item["durations"]) for item in rhythm_plan[: phrase_end_index + 1]
+                        )
+                        phrase_bar_targets.append(int(max(running - 1e-9, 0.0) // beat_cap) + 1)
+                verse_music_unit_form = VerseMusicUnitForm(
+                    music_unit_id=music_unit_id,
+                    pickup_beats=verse_template_anacrusis_beats or 0.0,
+                    total_measure_count=max(1, int(max(total_beats - 1e-9, 0.0) // beat_cap) + 1),
+                    phrase_end_syllable_indices=list(verse_template_phrase_end_indices),
+                    phrase_bar_targets=phrase_bar_targets,
+                    rhythmic_skeleton=[list(item["durations"]) for item in verse_rhythm_template],
+                )
 
         sections.append(
             ScoreSection(
@@ -1074,6 +1148,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             stage="melody",
             rationale="Deterministic lyric-to-rhythm mapping with section-wise diatonic chord progression as harmonic authority.",
             arrangement_music_units=arrangement_music_units,
+            verse_music_unit_form=verse_music_unit_form,
         ),
         sections=sections,
         measures=measures,
@@ -1087,6 +1162,29 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             repaired=pickup_repair,
             reason="phrase_end_alignment_with_pickup",
         )
+
+    if score.meta.verse_music_unit_form is not None:
+        verse_sections = [section.id for section in score.sections if section.is_verse]
+        spans: dict[str, set[int]] = {}
+        for measure in score.measures:
+            for note in measure.voices["soprano"]:
+                if note.section_id in verse_sections:
+                    spans.setdefault(note.section_id, set()).add(measure.number)
+        expected_count = score.meta.verse_music_unit_form.total_measure_count
+        for section_id in verse_sections[1:]:
+            actual = len(spans.get(section_id, set()))
+            if actual != expected_count:
+                log_event(
+                    logger,
+                    "verse_form_measure_mismatch",
+                    level=logging.ERROR,
+                    section_id=section_id,
+                    expected_measures=expected_count,
+                    actual_measures=actual,
+                )
+                raise VerseFormConstraintError(
+                    f"Verse {section_id} could not fit canonical verse form ({actual} measures vs {expected_count})"
+                )
     return score
 
 
@@ -1097,7 +1195,20 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     log_event(logger, "melody_generation_started", section_count=len(req.sections))
     for attempt_idx in range(MAX_GENERATION_ATTEMPTS):
         attempt = attempt_idx + 1
-        score = _compose_melody_once(req, attempt_idx)
+        try:
+            score = _compose_melody_once(req, attempt_idx)
+        except VerseFormConstraintError as exc:
+            log_event(
+                logger,
+                "verse_form_constraint_failed",
+                level=logging.ERROR,
+                attempt=attempt,
+                reason="canonical_verse_form_projection_failed",
+                diagnostics=str(exc),
+            )
+            raise ValueError(
+                "We couldn’t fit a later verse into Verse 1’s form. Please simplify the text for that verse (or adjust Bars per Verse when that option is available)."
+            ) from exc
         harmony_issues = [
             err
             for err in validate_score(score, primary_mode)
