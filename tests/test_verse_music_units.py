@@ -112,3 +112,38 @@ def test_playback_timing_uses_one_second_pause_only_between_real_sections():
     music_seconds = sum(note.beats * seconds_per_beat for note in notes)
     assert transition_count == 2
     assert total_seconds == music_seconds + 2.0
+
+
+def test_musicxml_uses_canonical_verse_notes_with_melisma_for_shorter_third_verse():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse", is_verse=True, text="When peace like a river attendeth my way"),
+            LyricSection(id="c", label="Chorus", is_verse=False, text="It is well with my soul"),
+            LyricSection(id="v2", label="Verse", is_verse=True, text="When sorrows like sea billows roll"),
+            LyricSection(id="v3", label="Verse", is_verse=True, text="When toils"),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v2"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v3"),
+        ],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90),
+    )
+
+    melody = generate_melody_score(req)
+    soprano_notes = [note for measure in melody.measures for note in measure.voices["soprano"]]
+    verse_1 = [note for note in soprano_notes if note.section_id == "sec-1"]
+    verse_3 = [note for note in soprano_notes if note.section_id == "sec-5"]
+
+    assert len(verse_1) == len(verse_3)
+    assert [(note.pitch, note.beats, note.is_rest) for note in verse_1] == [
+        (note.pitch, note.beats, note.is_rest) for note in verse_3
+    ]
+
+    xml = export_musicxml(melody)
+    assert '<lyric number="3">' in xml
+    assert "<text>toils</text>" in xml
+    assert xml.count('<lyric number="3">') >= 2
+    assert '<lyric number="3">' in xml and '<extend/>' in xml
