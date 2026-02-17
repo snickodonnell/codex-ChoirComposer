@@ -17,6 +17,7 @@ from app.models import (
     ScoreMeta,
     ScoreNote,
     ScoreSection,
+    ScoreSyllable,
 )
 from app.services.lyric_mapping import (
     section_archetype,
@@ -708,6 +709,58 @@ def _regenerate_progression_for_units(
     return sorted(regenerated, key=lambda chord: chord.measure_number)
 
 
+def _project_verse_rhythm_to_template(section_id: str, syllables: list["ScoreSyllable"], template_plan: list[dict]) -> list[dict]:
+    projected: list[dict] = []
+    for idx, template_item in enumerate(template_plan):
+        syllable = syllables[idx] if idx < len(syllables) else None
+        projected.append(
+            {
+                "syllable_id": syllable.id if syllable else f"{section_id}-template-slot-{idx}",
+                "syllable_text": syllable.text if syllable else None,
+                "section_id": section_id,
+                "lyric_index": idx,
+                "durations": list(template_item["durations"]),
+                "modes": list(template_item["modes"]),
+                "stressed": syllable.stressed if syllable else bool(template_item.get("stressed", False)),
+            }
+        )
+    return projected
+
+
+def _align_verse_syllables_to_template(section_id: str, syllables: list[ScoreSyllable], template_count: int) -> list[ScoreSyllable]:
+    if template_count <= 0:
+        return []
+    if len(syllables) == template_count:
+        return syllables
+    if len(syllables) > template_count:
+        aligned = [s.model_copy(deep=True) for s in syllables[:template_count]]
+        overflow = syllables[template_count - 1 :]
+        aligned[-1].text = " ".join(s.text for s in overflow if s.text).strip() or aligned[-1].text
+        aligned[-1].phrase_end_after = overflow[-1].phrase_end_after
+        aligned[-1].breath_after_phrase = overflow[-1].breath_after_phrase
+        aligned[-1].must_end_at_barline = overflow[-1].must_end_at_barline
+        return aligned
+
+    aligned = [s.model_copy(deep=True) for s in syllables]
+    for idx in range(len(aligned), template_count):
+        aligned.append(
+            ScoreSyllable(
+                id=f"{section_id}-fill-{idx}",
+                text="",
+                section_id=section_id,
+                word_index=idx,
+                syllable_index_in_word=0,
+                word_text="",
+                hyphenated=False,
+                stressed=False,
+                phrase_end_after=(idx == template_count - 1),
+                must_end_at_barline=False,
+                breath_after_phrase=False,
+            )
+        )
+    return aligned
+
+
 def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
@@ -729,6 +782,9 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
     arrangement_music_units = _build_arrangement_music_units(arranged_instances)
+
+    verse_rhythm_template: list[dict] | None = None
+    verse_template_anacrusis_beats: float | None = None
 
     for idx, (
         arranged_section_id,
@@ -770,6 +826,23 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             rhythm_seed,
             initial_offset_beats=anacrusis_beats,
         )
+
+        if is_verse:
+            if verse_rhythm_template is None:
+                verse_rhythm_template = [
+                    {
+                        "durations": list(item["durations"]),
+                        "modes": list(item["modes"]),
+                        "stressed": item["stressed"],
+                    }
+                    for item in rhythm_plan
+                ]
+                verse_template_anacrusis_beats = anacrusis_beats
+            elif verse_rhythm_template:
+                syllables = _align_verse_syllables_to_template(section_id, syllables, len(verse_rhythm_template))
+                anacrusis_beats = verse_template_anacrusis_beats or 0.0
+                rhythm_plan = _project_verse_rhythm_to_template(section_id, syllables, verse_rhythm_template)
+
         sections.append(
             ScoreSection(
                 id=section_id,
@@ -819,6 +892,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     log_event(logger, "pickup_compensation_strategy", strategy="full_bar_padding", section_count=len(section_plans))
 
     soprano_notes: list[ScoreNote] = []
+    section_note_indices: dict[str, list[int]] = {}
     cursor = 0.0
     phrase_end_ids_by_section = {
         section.id: {syllable.id for syllable in section.syllables if syllable.phrase_end_after}
@@ -848,7 +922,9 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     pickup_chord.degree = pickup_degree
                     pickup_chord.symbol = chord_symbol(scale, pickup_degree)
                     pickup_chord.pitch_classes = triad_pitch_classes(scale, pickup_degree)
+            pickup_note_index = len(soprano_notes)
             soprano_notes.append(ScoreNote(pitch="REST", beats=anacrusis_beats, is_rest=True, section_id=section_id))
+            section_note_indices.setdefault(section_id, []).append(pickup_note_index)
             cursor += anacrusis_beats
 
         for item in rhythm_plan:
@@ -906,6 +982,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
                 lyric_text = item["syllable_text"] if mode not in {"melisma_continue", "tie_continue"} else None
 
+                note_index = len(soprano_notes)
                 soprano_notes.append(
                     ScoreNote(
                         pitch=midi_to_pitch(candidate),
@@ -917,6 +994,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                         lyric_index=item["lyric_index"],
                     )
                 )
+                section_note_indices.setdefault(section_id, []).append(note_index)
                 repeated_pitch_count = repeated_pitch_count + 1 if candidate == prev else 1
                 prev = candidate
                 phrase_progress += 1
@@ -924,6 +1002,24 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     phrase_idx += 1
                     phrase_progress = 0
                 cursor += duration
+
+    verse_template_notes: list[ScoreNote] | None = None
+    for section_id, _label, is_verse, _music_unit_id, _anacrusis_beats, _rhythm_plan in section_plans:
+        if not is_verse:
+            continue
+        note_indices = section_note_indices.get(section_id, [])
+        if not note_indices:
+            continue
+        if verse_template_notes is None:
+            verse_template_notes = [soprano_notes[idx].model_copy(deep=True) for idx in note_indices]
+            continue
+
+        for offset, note_idx in enumerate(note_indices):
+            if offset >= len(verse_template_notes):
+                break
+            template = verse_template_notes[offset]
+            soprano_notes[note_idx].pitch = template.pitch
+            soprano_notes[note_idx].is_rest = template.is_rest
 
 
     measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, ts)

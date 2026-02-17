@@ -76,3 +76,39 @@ def test_musicxml_stacks_multiple_verse_lyrics_under_shared_notes():
     xml = export_musicxml(score)
     assert '<lyric number="1">' in xml
     assert '<lyric number="2">' in xml
+
+
+def test_verse_instances_reuse_the_exact_same_soprano_structure():
+    melody = generate_melody_score(_req())
+    soprano_notes = [note for measure in melody.measures for note in measure.voices["soprano"]]
+    first_verse = [note for note in soprano_notes if note.section_id == "sec-1"]
+    second_verse = [note for note in soprano_notes if note.section_id == "sec-3"]
+
+    assert first_verse
+    assert second_verse
+    assert len(first_verse) == len(second_verse)
+
+    first_signature = [(note.pitch, note.beats, note.is_rest, note.lyric_mode) for note in first_verse]
+    second_signature = [(note.pitch, note.beats, note.is_rest, note.lyric_mode) for note in second_verse]
+    assert first_signature == second_signature
+
+
+def test_playback_timing_uses_one_second_pause_only_between_real_sections():
+    melody = generate_melody_score(_req())
+    notes = [note for measure in melody.measures for note in measure.voices["soprano"]]
+    seconds_per_beat = 60 / melody.meta.tempo_bpm
+
+    total_seconds = 0.0
+    previous_section_id = None
+    transition_count = 0
+    for note in notes:
+        current_section_id = note.section_id if note.section_id != "padding" else previous_section_id
+        if previous_section_id and current_section_id and current_section_id != previous_section_id:
+            transition_count += 1
+            total_seconds += 1.0
+        total_seconds += note.beats * seconds_per_beat
+        previous_section_id = current_section_id or previous_section_id
+
+    music_seconds = sum(note.beats * seconds_per_beat for note in notes)
+    assert transition_count == 2
+    assert total_seconds == music_seconds + 2.0
