@@ -350,6 +350,27 @@ function formatApiErrorMessage(error) {
   const data = error?.response?.data;
   let message = null;
 
+  const toDisplayString = (value, fallback = 'Unexpected error.') => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed || fallback;
+    }
+    if (value instanceof Error && typeof value.message === 'string' && value.message.trim()) {
+      return value.message.trim();
+    }
+    if (value !== null && value !== undefined) {
+      try {
+        const serialized = JSON.stringify(value);
+        if (typeof serialized === 'string' && serialized.trim()) {
+          return serialized;
+        }
+      } catch (_) {
+        // no-op, fallback below
+      }
+    }
+    return fallback;
+  };
+
   if (data && typeof data === 'object') {
     if (typeof data.message === 'string' && data.message.trim()) {
       message = data.message;
@@ -361,28 +382,48 @@ function formatApiErrorMessage(error) {
       message = data.detail
         .map((d) => {
           if (typeof d === 'string') return d;
-          if (!d || typeof d !== 'object') return JSON.stringify(d);
+          if (!d || typeof d !== 'object') return toDisplayString(d, 'Invalid request payload.');
           const loc = Array.isArray(d.loc) ? d.loc.join('.') : 'request';
-          const detailMessage = typeof d.msg === 'string' ? d.msg : JSON.stringify(d);
+          const detailMessage = typeof d.msg === 'string' ? d.msg : toDisplayString(d, 'Invalid request payload.');
           return `${loc}: ${detailMessage}`;
         })
         .join(' | ');
     } else {
-      try {
-        message = JSON.stringify(data);
-      } catch (_) {
-        message = String(data);
-      }
+      message = toDisplayString(data);
     }
   }
 
   if (!message) {
-    message = error?.message ? String(error.message) : String(error);
+    message = toDisplayString(error?.message || error);
   }
 
   const requestId = error?.request_id || getRequestIdFromHeaders(error?.response?.headers) || (data && typeof data === 'object' ? data.request_id : null);
-  return requestId ? `${message} (request_id: ${requestId})` : message;
+  return requestId ? `${toDisplayString(message)} (request_id: ${requestId})` : toDisplayString(message);
 }
+
+const isDevMode = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
+let hasLoggedMelodyGenerationErrorDebug = false;
+
+function runFormatApiErrorMessageRuntimeCheck() {
+  if (!isDevMode || typeof runFormatApiErrorMessageRuntimeCheck._ran !== 'undefined') return;
+  runFormatApiErrorMessageRuntimeCheck._ran = true;
+
+  const cases = [
+    { name: 'fastapi-422-array', error: { response: { data: { detail: [{ loc: ['body', 'sections', 0], msg: 'field required' }] } } } },
+    { name: 'message-with-request-id', error: { response: { data: { message: 'Invalid mode', request_id: 'abc-123' } } } },
+    { name: 'plain-error', error: new Error('Network unavailable') },
+    { name: 'arbitrary-object', error: { foo: 'bar', nested: { ok: true } } },
+  ];
+
+  cases.forEach(({ name, error }) => {
+    const msg = formatApiErrorMessage(error);
+    if (typeof msg !== 'string') {
+      console.error('[formatApiErrorMessage runtime check failed]', { name, type: typeof msg, msg, error });
+    }
+  });
+}
+
+runFormatApiErrorMessageRuntimeCheck();
 
 function getSectionRows() {
   return [...sectionsEl.querySelectorAll('.section-row')];
@@ -1506,9 +1547,19 @@ generateMelodyBtn.onclick = async () => {
   try {
     payload = collectPayload();
     res = await post('/api/generate-melody', payload);
-  } catch (error) {
-    if (error?.isValidationError) return;
-    showErrors([formatApiErrorMessage(error)]);
+  } catch (err) {
+    if (err?.isValidationError) return;
+    const msg = formatApiErrorMessage(err);
+    if (isDevMode && !hasLoggedMelodyGenerationErrorDebug) {
+      hasLoggedMelodyGenerationErrorDebug = true;
+      console.error('[melody-generation-error-debug]', {
+        typeOfErr: typeof err,
+        err,
+        typeOfMsg: typeof msg,
+        msg,
+      });
+    }
+    showErrors([msg]);
     return;
   }
   const score = (await res.json()).score;
