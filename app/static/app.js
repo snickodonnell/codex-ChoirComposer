@@ -38,6 +38,7 @@ const melodyPreviewZoomEl = document.getElementById('melodyPreviewZoom');
 const satbPreviewZoomEl = document.getElementById('satbPreviewZoom');
 
 const formErrorsEl = document.getElementById('formErrors');
+const composerWarningsEl = document.getElementById('composerWarnings');
 const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G','G#','Ab','A','A#','Bb','B']);
 const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
 let sectionIdCounter = 0;
@@ -311,6 +312,18 @@ function validatePreferences() {
   }
 
   return errors;
+}
+
+
+function showComposerWarnings(warnings = []) {
+  if (!composerWarningsEl) return;
+  if (!warnings.length) {
+    composerWarningsEl.style.display = 'none';
+    composerWarningsEl.innerHTML = '';
+    return;
+  }
+  composerWarningsEl.innerHTML = `<strong>Composer warnings</strong><br/>${warnings.map((warning) => `• ${warning}`).join('<br/>')}`;
+  composerWarningsEl.style.display = 'block';
 }
 
 function showErrors(errors) {
@@ -611,6 +624,9 @@ async function refreshPreview(target) {
     });
     const payload = await res.json();
     renderPreviewSvgs(target, payload.artifacts, payload.cache_hit);
+    if (payload.warnings?.length) {
+      showComposerWarnings(payload.warnings);
+    }
   } catch (error) {
     setPreviewStatus(target, `Preview failed: ${String(error.message || error)}`);
   }
@@ -708,7 +724,9 @@ async function refineActiveMelody({ regenerate }) {
   }
 
   const res = await post('/api/refine-melody', payload);
-  const score = (await res.json()).score;
+  const melodyPayload = await res.json();
+  const score = melodyPayload.score;
+  showComposerWarnings(melodyPayload.warnings || []);
   if (regenerate) {
     appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
   } else {
@@ -1564,7 +1582,9 @@ generateMelodyBtn.onclick = async () => {
     showErrors([msg]);
     return;
   }
-  const score = (await res.json()).score;
+  const melodyPayload = await res.json();
+  const score = melodyPayload.score;
+  showComposerWarnings(melodyPayload.warnings || []);
   const sectionClusterMap = buildSectionClusterMap(payload);
   melodyDraftVersions = [];
   activeDraftVersionId = null;

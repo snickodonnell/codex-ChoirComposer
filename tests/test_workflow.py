@@ -6,6 +6,7 @@ from app import main as main_module
 from app.main import app
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score
+from app.services.score_validation import ValidationDiagnostics
 
 
 client = TestClient(app)
@@ -47,13 +48,13 @@ def test_validate_score_endpoint_returns_valid_true_for_generated_score():
     res = client.post("/api/validate-score", json={"score": melody.model_dump()})
 
     assert res.status_code == 200
-    assert res.json() == {"valid": True, "errors": []}
+    assert res.json() == {"valid": True, "errors": [], "warnings": []}
 
 
 def test_validate_score_endpoint_reports_errors_and_request_id(monkeypatch):
     melody = generate_melody_score(_sample_request())
 
-    monkeypatch.setattr(main_module, "validate_score", lambda *_args, **_kwargs: ["diagnostic: mismatch"])
+    monkeypatch.setattr(main_module, "validate_score_diagnostics", lambda *_args, **_kwargs: ValidationDiagnostics(fatal=["diagnostic: mismatch"], warnings=[]))
 
     res = client.post("/api/validate-score", json={"score": melody.model_dump()})
 
@@ -62,6 +63,17 @@ def test_validate_score_endpoint_reports_errors_and_request_id(monkeypatch):
     assert payload["valid"] is False
     assert "failed validation" in payload["message"]
     assert payload["request_id"]
+
+
+
+def test_generate_melody_returns_warning_payload_without_failing(monkeypatch):
+    warning = "Soprano strong-beat note 0 (F#4) conflicts with chord in measure 1."
+    monkeypatch.setattr(main_module, "validate_score_diagnostics", lambda *_args, **_kwargs: ValidationDiagnostics(fatal=[], warnings=[warning]))
+
+    res = client.post("/api/generate-melody", json=_sample_request().model_dump())
+
+    assert res.status_code == 200
+    assert warning in res.json()["warnings"]
 
 def test_compose_end_score_endpoint_runs_full_workflow():
     req = _sample_request()
@@ -163,7 +175,7 @@ def test_generate_melody_logs_final_failure_event(caplog, monkeypatch):
 def test_validation_failure_logs_event(caplog, monkeypatch):
     melody = generate_melody_score(_sample_request())
 
-    monkeypatch.setattr(main_module, "validate_score", lambda *_args, **_kwargs: ["diagnostic: strong beat conflict"] )
+    monkeypatch.setattr(main_module, "validate_score_diagnostics", lambda *_args, **_kwargs: ValidationDiagnostics(fatal=["diagnostic: timing mismatch"], warnings=[]))
 
     with caplog.at_level(logging.ERROR):
         res = client.post("/api/generate-satb", json={"score": melody.model_dump()})
