@@ -37,11 +37,14 @@ def export_musicxml(score: CanonicalScore) -> str:
     chords = {c.measure_number: c for c in score.chord_progression}
     breath_mark_positions = _collect_breath_mark_positions(score)
 
+    arrangement_music_unit_lines = _arrangement_music_unit_comments(score)
+
     lines: list[str] = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
         '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN"',
         '  "http://www.musicxml.org/dtds/partwise.dtd">',
         '<score-partwise version="3.1">',
+        *arrangement_music_unit_lines,
         "  <part-list>",
         '    <score-part id="P1">',
         "      <part-name>Choir</part-name>",
@@ -94,6 +97,19 @@ def export_musicxml(score: CanonicalScore) -> str:
         stage=score.meta.stage,
     )
     return content
+
+
+def _arrangement_music_unit_comments(score: CanonicalScore) -> list[str]:
+    if not score.meta.arrangement_music_units:
+        return []
+    lines = ["  <!-- arrangement-music-units -->"]
+    for music_unit in score.meta.arrangement_music_units:
+        lines.append(
+            "  <!-- arrangement_index="
+            f"{music_unit.arrangement_index},cluster_id={_escape_xml(music_unit.cluster_id)},verse_index={music_unit.verse_index}"
+            " -->"
+        )
+    return lines
 
 
 def _voice_measure_xml(

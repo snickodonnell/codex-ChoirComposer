@@ -171,6 +171,13 @@ class ScoreMeta(BaseModel):
     style: str
     stage: Literal["melody", "satb"]
     rationale: str
+    arrangement_music_units: list["ArrangementMusicUnit"] = Field(default_factory=list)
+
+
+class ArrangementMusicUnit(BaseModel):
+    arrangement_index: int = Field(ge=0)
+    cluster_id: str = Field(min_length=1, max_length=80)
+    verse_index: int = Field(ge=1)
 
 
 class CanonicalScore(BaseModel):
