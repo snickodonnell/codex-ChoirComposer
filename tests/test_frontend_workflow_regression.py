@@ -473,3 +473,56 @@ def test_satb_stop_refine_start_cycle_emits_new_playback_start_event():
                 browser.close()
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                seed_state = page.evaluate(
+                    """
+                    () => ({
+                      sectionRows: Array.from(document.querySelectorAll('#sections .section-row')).map((row) => ({
+                        label: row.querySelector('.section-label')?.value || '',
+                        isVerse: Boolean(row.querySelector('.section-is-verse')?.checked),
+                      })),
+                      arrangementModes: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-mode')).map((el) => el.value),
+                      arrangementBeats: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-beats')).map((el) => Number(el.value)),
+                    })
+                    """
+                )
+
+                assert len(seed_state["sectionRows"]) == 3
+                assert all(item["label"] == "Verse" and item["isVerse"] for item in seed_state["sectionRows"])
+                assert seed_state["arrangementModes"] == ["manual", "manual", "manual"]
+                assert seed_state["arrangementBeats"] == [2, 2, 2]
+
+                page.fill("#sections .section-row:nth-of-type(1) .section-label", "Chorus")
+                page.click("#arrangementList .arrangement-anacrusis-mode")
+                page.select_option("#arrangementList .arrangement-anacrusis-mode", "off")
+                page.fill("#arrangementList .arrangement-anacrusis-beats", "0")
+
+                page.click("#loadTestData")
+
+                reset_state = page.evaluate(
+                    """
+                    () => ({
+                      sectionLabels: Array.from(document.querySelectorAll('#sections .section-label')).map((el) => el.value),
+                      arrangementModes: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-mode')).map((el) => el.value),
+                      arrangementBeats: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-beats')).map((el) => Number(el.value)),
+                    })
+                    """
+                )
+
+                assert reset_state["sectionLabels"] == ["Verse", "Verse", "Verse"]
+                assert reset_state["arrangementModes"] == ["manual", "manual", "manual"]
+                assert reset_state["arrangementBeats"] == [2, 2, 2]
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")

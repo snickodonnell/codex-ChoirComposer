@@ -42,6 +42,13 @@ const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G',
 const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
 let sectionIdCounter = 0;
 const MAX_DRAFT_VERSIONS = 20;
+const HYMN_TEST_DATA_SECTIONS = [
+  { label: 'Verse', is_verse: true, text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
+  { label: 'Verse', is_verse: true, text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
+  { label: 'Verse', is_verse: true, text: "Through many dangers, toils, and snares\nI have already come\n'Tis grace hath brought me safe thus far\nAnd grace will lead me home" },
+];
+const HYMN_TEST_DATA_ANACRUSIS_MODE = 'manual';
+const HYMN_TEST_DATA_ANACRUSIS_BEATS = 2;
 let melodyDraftVersions = [];
 let activeDraftVersionId = null;
 let satbDraftVersionsByMelodyVersion = new Map();
@@ -853,19 +860,13 @@ function clearSectionsAndArrangement() {
 }
 
 function loadHymnTestData() {
-  const sections = [
-    { label: 'Verse', is_verse: true, text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
-    { label: 'Verse', is_verse: true, text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
-    { label: 'Verse', is_verse: true, text: "Through many dangers, toils, and snares\nI have already come\n'Tis grace hath brought me safe thus far\nAnd grace will lead me home" },
-  ];
-
   clearSectionsAndArrangement();
-  sections.forEach((section) => addSectionRow(section.label, section.text, section.is_verse || false));
+  HYMN_TEST_DATA_SECTIONS.forEach((section) => addSectionRow(section.label, section.text, section.is_verse || false));
 
   const rows = getSectionRows();
-  addArrangementItem(rows[0]?.dataset.sectionId, null, 'manual', 2);
-  addArrangementItem(rows[1]?.dataset.sectionId, null, 'manual', 2);
-  addArrangementItem(rows[2]?.dataset.sectionId, null, 'manual', 2);
+  addArrangementItem(rows[0]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS);
+  addArrangementItem(rows[1]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS);
+  addArrangementItem(rows[2]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS);
 
   document.getElementById('key').value = 'G';
   document.getElementById('primaryMode').value = 'major';
@@ -1411,6 +1412,9 @@ document.getElementById('time').addEventListener('input', () => {
   [...arrangementListEl.querySelectorAll('.arrangement-item')].forEach((item) => refreshArrangementAnacrusisUI(item));
 });
 if (loadTestDataBtn) loadTestDataBtn.onclick = loadHymnTestData;
+if (typeof window !== 'undefined') {
+  window.loadHymnTestData = loadHymnTestData;
+}
 
 loadHymnTestData();
 
