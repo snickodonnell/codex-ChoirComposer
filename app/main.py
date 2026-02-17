@@ -26,10 +26,10 @@ from app.models import (
     HarmonizeRequest,
     MelodyResponse,
     PDFExportRequest,
-    RefineRequest,
+    RegenerateRequest,
     SATBResponse,
 )
-from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, refine_score
+from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import EngravingOptions, preview_service
 from app.services.pdf_export import build_score_pdf
@@ -186,31 +186,29 @@ def generate_melody_endpoint(payload: CompositionRequest):
         raise _handle_user_error("Melody generation", exc) from exc
 
 
-@app.post("/api/refine-melody", response_model=MelodyResponse)
-def refine_melody_endpoint(payload: RefineRequest):
+@app.post("/api/regenerate-melody", response_model=MelodyResponse)
+def regenerate_melody_endpoint(payload: RegenerateRequest):
     try:
-        _require_score_stage(payload.score, "melody", "Melody refinement")
-        _require_valid_score(payload.score, "Melody refinement")
+        _require_score_stage(payload.score, "melody", "Melody regeneration")
+        _require_valid_score(payload.score, "Melody regeneration")
         log_event(
             logger,
             "draft_version_operation",
             operation="update",
             target="melody",
-            regenerate=payload.regenerate,
+            regenerate=True,
             selected_units=payload.selected_units or payload.selected_clusters,
         )
         return MelodyResponse(
-            score=normalize_score_for_rendering(refine_score(
+            score=normalize_score_for_rendering(regenerate_score(
                 payload.score,
-                payload.instruction,
-                payload.regenerate,
                 payload.selected_units,
                 payload.selected_clusters,
                 payload.section_clusters,
             ))
         )
     except ValueError as exc:
-        raise _handle_user_error("Melody refinement", exc) from exc
+        raise _handle_user_error("Melody regeneration", exc) from exc
 
 
 @app.post("/api/generate-satb", response_model=SATBResponse)
@@ -225,25 +223,23 @@ def generate_satb_endpoint(payload: HarmonizeRequest):
         raise _handle_user_error("SATB generation", exc) from exc
 
 
-@app.post("/api/refine-satb", response_model=SATBResponse)
-def refine_satb_endpoint(payload: RefineRequest):
+@app.post("/api/regenerate-satb", response_model=SATBResponse)
+def regenerate_satb_endpoint(payload: RegenerateRequest):
     try:
-        _require_score_stage(payload.score, "satb", "SATB refinement")
-        _require_valid_score(payload.score, "SATB refinement")
-        log_event(logger, "draft_version_operation", operation="update", target="satb", regenerate=payload.regenerate)
+        _require_score_stage(payload.score, "satb", "SATB regeneration")
+        _require_valid_score(payload.score, "SATB regeneration")
+        log_event(logger, "draft_version_operation", operation="update", target="satb", regenerate=True)
         melody_projection = _extract_melody_from_satb(payload.score)
-        refined_melody = refine_score(
+        regenerated_melody = regenerate_score(
             melody_projection,
-            payload.instruction,
-            payload.regenerate,
             payload.selected_units,
             payload.selected_clusters,
             payload.section_clusters,
         )
-        score = normalize_score_for_rendering(harmonize_score(refined_melody))
-        return SATBResponse(score=score, harmonization_notes="Refined SATB while preserving progression authority.")
+        score = normalize_score_for_rendering(harmonize_score(regenerated_melody))
+        return SATBResponse(score=score, harmonization_notes="Regenerated SATB while preserving progression authority.")
     except ValueError as exc:
-        raise _handle_user_error("SATB refinement", exc) from exc
+        raise _handle_user_error("SATB regeneration", exc) from exc
 
 
 

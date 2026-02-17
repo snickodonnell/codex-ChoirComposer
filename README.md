@@ -21,7 +21,7 @@ All generation produces one canonical `CanonicalScore` first. Then every downstr
 This prevents format drift and keeps lyric/meter/voice consistency checks centralized.
 
 ## Validation guarantees
-Every generated/refined score runs validation checks for:
+Every generated/regenerated score runs validation checks for:
 1. **Measure timing**: each voice sums exactly to the measure capacity from time signature
 2. **Voice separation**: SATB order and practical spacing
 3. **Lyric mapping**: soprano lyric indices map exactly to section syllables
@@ -32,7 +32,7 @@ Validation endpoint: `POST /api/validate-score`
 1. **Lyrics + structure input** (verse, chorus, bridge, etc.)
 2. **Lyric prosody mapping engine** (deterministic, policy-driven rhythm spans with punctuation/section/preset controls)
 3. **Optional key/time/tempo** with auto-selection defaults
-4. **Melody-first workflow** (generate + refine/regenerate)
+4. **Melody-first workflow** (generate + regenerate with draft history)
 5. **SATB harmonization** with range constraints
 6. **In-app preview** (notation + lyric alignment lane + synth playback)
 7. **Export** to US Letter PDF and MusicXML
