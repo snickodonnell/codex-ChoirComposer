@@ -180,15 +180,11 @@ def test_third_verse_measure_count_matches_first_verse_for_shared_music_unit():
 
 
 def _count_full_measures(score, section_id: str) -> int:
-    beat_cap = 4
-    total_beats = 0.0
-    for measure in score.measures:
-        total_beats += sum(
-            note.beats
-            for note in measure.voices["soprano"]
-            if note.section_id == section_id and not note.is_rest
-        )
-    return int(total_beats // beat_cap)
+    return sum(
+        1
+        for measure in score.measures
+        if any(note.section_id == section_id for note in measure.voices["soprano"])
+    )
 
 
 def test_verse_music_unit_form_fields_match_canonical_first_verse_projection():
