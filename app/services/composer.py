@@ -5,6 +5,7 @@ import math
 import random
 import hashlib
 import re
+from dataclasses import dataclass
 
 from app.logging_utils import log_event
 
@@ -50,6 +51,68 @@ logger = logging.getLogger(__name__)
 
 class VerseFormConstraintError(ValueError):
     pass
+
+
+@dataclass
+class PlannedVerseForm:
+    pickup_beats: float
+    target_measure_count: int
+    phrase_end_syllable_indices: list[int]
+    phrase_bar_targets: list[int]
+    rhythmic_skeleton: list[list[float]]
+
+    def to_music_unit_form(self, music_unit_id: str) -> VerseMusicUnitForm:
+        return VerseMusicUnitForm(
+            music_unit_id=music_unit_id,
+            pickup_beats=self.pickup_beats,
+            total_measure_count=self.target_measure_count,
+            phrase_end_syllable_indices=list(self.phrase_end_syllable_indices),
+            phrase_bar_targets=list(self.phrase_bar_targets),
+            rhythmic_skeleton=[list(slot) for slot in self.rhythmic_skeleton],
+        )
+
+
+class VerseFormPlanner:
+    def __init__(self, *, time_signature: str, bars_per_verse_target: int | None):
+        self._time_signature = time_signature
+        self._bars_per_verse_target = bars_per_verse_target
+        self._beat_cap = beats_per_measure(time_signature)
+
+    def resolve_pickup_beats(
+        self,
+        *,
+        mode: str,
+        configured_beats: float,
+        syllable_count: int,
+        seed: str,
+    ) -> float:
+        return _resolve_anacrusis_beats(mode, configured_beats, syllable_count, self._beat_cap, seed=seed)
+
+    def phrase_end_indices(self, syllables: list[ScoreSyllable], phrase_blocks: list[PhraseBlock]) -> list[int]:
+        return _phrase_end_indices_from_phrase_blocks(syllables, phrase_blocks)
+
+    def plan(
+        self,
+        *,
+        pickup_beats: float,
+        phrase_end_syllable_indices: list[int],
+        rhythm_plan: list[dict],
+        rhythm_template: list[dict],
+    ) -> PlannedVerseForm:
+        total_beats = pickup_beats + sum(sum(item["durations"]) for item in rhythm_plan)
+        phrase_bar_targets: list[int] = []
+        running = pickup_beats
+        for phrase_end_index in phrase_end_syllable_indices:
+            if 0 <= phrase_end_index < len(rhythm_plan):
+                running = pickup_beats + sum(sum(item["durations"]) for item in rhythm_plan[: phrase_end_index + 1])
+                phrase_bar_targets.append(int(max(running - 1e-9, 0.0) // self._beat_cap) + 1)
+        return PlannedVerseForm(
+            pickup_beats=pickup_beats,
+            target_measure_count=max(1, int(max(total_beats - 1e-9, 0.0) // self._beat_cap) + 1),
+            phrase_end_syllable_indices=list(phrase_end_syllable_indices),
+            phrase_bar_targets=phrase_bar_targets,
+            rhythmic_skeleton=[list(item["durations"]) for item in rhythm_template],
+        )
 
 
 def _pack_measures(voice_notes: dict[str, list[ScoreNote]], time_signature: str) -> list[ScoreMeasure]:
@@ -939,6 +1002,10 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
     arrangement_music_units = _build_arrangement_music_units(arranged_instances)
+    verse_form_planner = VerseFormPlanner(
+        time_signature=ts,
+        bars_per_verse_target=req.preferences.bars_per_verse,
+    )
 
     verse_syllable_counts = [
         len(tokenize_phrase_blocks(f"verse-precompute-{idx}", phrase_blocks))
@@ -964,7 +1031,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         section = section_defs[arranged_section_id]
         section_id = f"sec-{idx}"
         syllables = tokenize_phrase_blocks(section_id, phrase_blocks)
-        phrase_end_indices_from_blocks = _phrase_end_indices_from_phrase_blocks(syllables, phrase_blocks)
+        phrase_end_indices_from_blocks = verse_form_planner.phrase_end_indices(syllables, phrase_blocks)
         if is_verse and phrase_end_indices_from_blocks:
             _apply_phrase_end_indices(syllables, phrase_end_indices_from_blocks, phrase_blocks)
         rhythm_config = config_for_preset(req.preferences.lyric_rhythm_preset, section_label)
@@ -981,11 +1048,10 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             music_unit_id=music_unit_id,
             mode=anacrusis_mode,
         )
-        anacrusis_beats = _resolve_anacrusis_beats(
-            anacrusis_mode,
-            configured_anacrusis_beats,
-            len(syllables),
-            beat_cap,
+        anacrusis_beats = verse_form_planner.resolve_pickup_beats(
+            mode=anacrusis_mode,
+            configured_beats=configured_anacrusis_beats,
+            syllable_count=len(syllables),
             seed=pickup_seed,
         )
         rhythm_plan = plan_syllable_rhythm(
@@ -1089,23 +1155,12 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                 rhythm_plan = _project_verse_rhythm_to_template(section_id, syllables, verse_rhythm_template)
 
             if verse_rhythm_template:
-                total_beats = anacrusis_beats + sum(sum(item["durations"]) for item in rhythm_plan)
-                phrase_bar_targets: list[int] = []
-                running = anacrusis_beats
-                for phrase_end_index in verse_template_phrase_end_indices:
-                    if 0 <= phrase_end_index < len(rhythm_plan):
-                        running = anacrusis_beats + sum(
-                            sum(item["durations"]) for item in rhythm_plan[: phrase_end_index + 1]
-                        )
-                        phrase_bar_targets.append(int(max(running - 1e-9, 0.0) // beat_cap) + 1)
-                verse_music_unit_form = VerseMusicUnitForm(
-                    music_unit_id=music_unit_id,
+                verse_music_unit_form = verse_form_planner.plan(
                     pickup_beats=verse_template_anacrusis_beats or 0.0,
-                    total_measure_count=max(1, int(max(total_beats - 1e-9, 0.0) // beat_cap) + 1),
-                    phrase_end_syllable_indices=list(verse_template_phrase_end_indices),
-                    phrase_bar_targets=phrase_bar_targets,
-                    rhythmic_skeleton=[list(item["durations"]) for item in verse_rhythm_template],
-                )
+                    phrase_end_syllable_indices=verse_template_phrase_end_indices,
+                    rhythm_plan=rhythm_plan,
+                    rhythm_template=verse_rhythm_template,
+                ).to_music_unit_form(music_unit_id)
 
         sections.append(
             ScoreSection(

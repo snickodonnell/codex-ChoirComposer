@@ -179,6 +179,28 @@ def test_third_verse_measure_count_matches_first_verse_for_shared_music_unit():
     assert len(spans["sec-1"]) == melody.meta.verse_music_unit_form.total_measure_count
 
 
+def test_verse_music_unit_form_fields_match_canonical_first_verse_projection():
+    melody = generate_melody_score(_req())
+    form = melody.meta.verse_music_unit_form
+
+    assert form is not None
+
+    beat_cap = 4
+    total_beats = form.pickup_beats + sum(sum(slot) for slot in form.rhythmic_skeleton)
+    expected_measure_count = max(1, int(max(total_beats - 1e-9, 0.0) // beat_cap) + 1)
+    assert form.total_measure_count == expected_measure_count
+
+    recomputed_phrase_targets: list[int] = []
+    running = form.pickup_beats
+    for idx in form.phrase_end_syllable_indices:
+        if 0 <= idx < len(form.rhythmic_skeleton):
+            running = form.pickup_beats + sum(sum(slot) for slot in form.rhythmic_skeleton[: idx + 1])
+            recomputed_phrase_targets.append(int(max(running - 1e-9, 0.0) // beat_cap) + 1)
+
+    assert form.phrase_bar_targets == recomputed_phrase_targets
+
+
+
 def test_commas_in_third_verse_do_not_add_phrase_breaks_or_measures():
     req = CompositionRequest(
         sections=[
