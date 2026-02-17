@@ -140,6 +140,7 @@ def generate_melody_endpoint(payload: CompositionRequest):
         mode=payload.preferences.primary_mode,
         time_signature=payload.preferences.time_signature,
         tempo_bpm=payload.preferences.tempo_bpm,
+        bars_per_verse=payload.preferences.bars_per_verse,
         section_labels=[section.label for section in payload.sections],
         arrangement_order=arrangement_labels,
         music_units_selected=[u for u in selected_units if u],

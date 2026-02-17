@@ -56,6 +56,7 @@ class VerseFormConstraintError(ValueError):
 @dataclass
 class PlannedVerseForm:
     pickup_beats: float
+    bars_per_verse: int
     target_measure_count: int
     phrase_end_syllable_indices: list[int]
     phrase_bar_targets: list[int]
@@ -65,6 +66,7 @@ class PlannedVerseForm:
         return VerseMusicUnitForm(
             music_unit_id=music_unit_id,
             pickup_beats=self.pickup_beats,
+            bars_per_verse=self.bars_per_verse,
             total_measure_count=self.target_measure_count,
             phrase_end_syllable_indices=list(self.phrase_end_syllable_indices),
             phrase_bar_targets=list(self.phrase_bar_targets),
@@ -91,26 +93,167 @@ class VerseFormPlanner:
     def phrase_end_indices(self, syllables: list[ScoreSyllable], phrase_blocks: list[PhraseBlock]) -> list[int]:
         return _phrase_end_indices_from_phrase_blocks(syllables, phrase_blocks)
 
-    def plan(
+    def allocate_phrase_bar_targets(
+        self,
+        *,
+        syllables: list[ScoreSyllable],
+        phrase_end_syllable_indices: list[int],
+    ) -> list[int]:
+        if not phrase_end_syllable_indices:
+            return []
+
+        bars_target = self._bars_per_verse_target if self._bars_per_verse_target is not None else max(1, len(phrase_end_syllable_indices))
+        phrase_count = len(phrase_end_syllable_indices)
+        if bars_target < phrase_count:
+            raise VerseFormConstraintError(
+                f"Bars per Verse ({bars_target}) is too short for this verse. It needs at least {phrase_count} bars so each phrase can end at a barline."
+            )
+
+        phrase_lengths: list[int] = []
+        start = 0
+        for end in phrase_end_syllable_indices:
+            phrase_lengths.append(max(1, end - start + 1))
+            start = end + 1
+
+        remaining = bars_target - phrase_count
+        weighted = [remaining * length / max(1, sum(phrase_lengths)) for length in phrase_lengths]
+        per_phrase = [1 + int(math.floor(value)) for value in weighted]
+        assigned = sum(per_phrase)
+        if assigned < bars_target:
+            remainders = sorted(
+                range(phrase_count),
+                key=lambda idx: (weighted[idx] - math.floor(weighted[idx]), -phrase_lengths[idx], -idx),
+                reverse=True,
+            )
+            for idx in remainders[: bars_target - assigned]:
+                per_phrase[idx] += 1
+
+        cumulative: list[int] = []
+        running = 0
+        for bars in per_phrase:
+            running += bars
+            cumulative.append(running)
+        return cumulative
+
+    def enforce_phrase_bar_targets(
+        self,
+        *,
+        rhythm_plan: list[dict],
+        phrase_end_syllable_indices: list[int],
+        phrase_bar_targets: list[int],
+        pickup_beats: float,
+        syllable_count: int,
+    ) -> list[dict]:
+        if not phrase_end_syllable_indices:
+            return rhythm_plan
+
+        bars_target = phrase_bar_targets[-1] if phrase_bar_targets else (self._bars_per_verse_target or 1)
+        available_beats = bars_target * self._beat_cap
+        min_beats_needed = 0.5 * syllable_count
+        if min_beats_needed - available_beats > 1e-9:
+            raise VerseFormConstraintError(
+                f"Bars per Verse ({bars_target}) is too short for this verse. Try a longer verse length."
+            )
+
+        adjusted = [
+            {
+                **item,
+                "durations": list(item["durations"]),
+                "modes": list(item["modes"]),
+            }
+            for item in rhythm_plan
+        ]
+
+        phrase_start = 0
+        previous_target_beat = pickup_beats
+        for phrase_idx, phrase_end in enumerate(phrase_end_syllable_indices):
+            if not (0 <= phrase_end < len(adjusted)):
+                continue
+            phrase = adjusted[phrase_start : phrase_end + 1]
+            target_end_beat = phrase_bar_targets[phrase_idx] * self._beat_cap
+            desired_phrase_beats = target_end_beat - previous_target_beat
+            minimum_phrase_beats = 0.5 * len(phrase)
+            if desired_phrase_beats + 1e-9 < minimum_phrase_beats:
+                raise VerseFormConstraintError(
+                    f"Bars per Verse ({bars_target}) is too short to fit phrase {phrase_idx + 1} with current constraints."
+                )
+
+            current_phrase_beats = sum(sum(slot["durations"]) for slot in phrase)
+            delta = desired_phrase_beats - current_phrase_beats
+
+            if delta > 1e-9:
+                phrase[-1]["durations"][-1] += delta
+            elif delta < -1e-9:
+                remaining = -delta
+                for slot in reversed(phrase):
+                    for duration_idx in range(len(slot["durations"]) - 1, -1, -1):
+                        reducible = max(0.0, slot["durations"][duration_idx] - 0.5)
+                        if reducible <= 1e-9:
+                            continue
+                        reduction = min(reducible, remaining)
+                        slot["durations"][duration_idx] -= reduction
+                        remaining -= reduction
+                        if remaining <= 1e-9:
+                            break
+                    if remaining <= 1e-9:
+                        break
+                if remaining > 1e-9:
+                    raise VerseFormConstraintError(
+                        f"Bars per Verse ({bars_target}) is too short to fit phrase {phrase_idx + 1} with current constraints."
+                    )
+
+            previous_target_beat = target_end_beat
+            phrase_start = phrase_end + 1
+
+        for slot in adjusted:
+            normalized_durations: list[float] = []
+            normalized_modes: list[str] = []
+            for duration_idx, duration in enumerate(slot["durations"]):
+                mode = slot["modes"][duration_idx] if duration_idx < len(slot["modes"]) else "single"
+                remaining = duration
+                first = True
+                while remaining > self._beat_cap + 1e-9:
+                    normalized_durations.append(self._beat_cap)
+                    normalized_modes.append(mode if first else "tie_continue")
+                    remaining -= self._beat_cap
+                    first = False
+                normalized_durations.append(remaining)
+                normalized_modes.append(mode if first else "tie_continue")
+            slot["durations"] = normalized_durations
+            slot["modes"] = normalized_modes
+
+        return adjusted
+
+
+    def phrase_bar_targets_from_rhythm_plan(
         self,
         *,
         pickup_beats: float,
         phrase_end_syllable_indices: list[int],
         rhythm_plan: list[dict],
-        rhythm_template: list[dict],
-    ) -> PlannedVerseForm:
-        total_beats = pickup_beats + sum(sum(item["durations"]) for item in rhythm_plan)
-        phrase_bar_targets: list[int] = []
-        running = pickup_beats
+    ) -> list[int]:
+        targets: list[int] = []
         for phrase_end_index in phrase_end_syllable_indices:
             if 0 <= phrase_end_index < len(rhythm_plan):
-                running = pickup_beats + sum(sum(item["durations"]) for item in rhythm_plan[: phrase_end_index + 1])
-                phrase_bar_targets.append(int(max(running - 1e-9, 0.0) // self._beat_cap) + 1)
+                running_beats = pickup_beats + sum(sum(item["durations"]) for item in rhythm_plan[: phrase_end_index + 1])
+                targets.append(int(max(running_beats - 1e-9, 0.0) // self._beat_cap) + 1)
+        return targets
+
+    def plan(
+        self,
+        *,
+        pickup_beats: float,
+        bars_per_verse: int,
+        phrase_end_syllable_indices: list[int],
+        phrase_bar_targets: list[int],
+        rhythm_template: list[dict],
+    ) -> PlannedVerseForm:
         return PlannedVerseForm(
             pickup_beats=pickup_beats,
-            target_measure_count=max(1, int(max(total_beats - 1e-9, 0.0) // self._beat_cap) + 1),
+            bars_per_verse=bars_per_verse,
+            target_measure_count=bars_per_verse,
             phrase_end_syllable_indices=list(phrase_end_syllable_indices),
-            phrase_bar_targets=phrase_bar_targets,
+            phrase_bar_targets=list(phrase_bar_targets),
             rhythmic_skeleton=[list(item["durations"]) for item in rhythm_template],
         )
 
@@ -131,6 +274,17 @@ def _pack_measures(voice_notes: dict[str, list[ScoreNote]], time_signature: str)
                 m_voices[voice].append(note)
                 used += note.beats
                 cursors[voice] += 1
+
+            if used < beat_cap and cursors[voice] < len(voice_notes[voice]) and voice_notes[voice][cursors[voice]].beats > beat_cap + 1e-9:
+                overflowing = voice_notes[voice][cursors[voice]]
+                chunk = overflowing.model_copy(deep=True)
+                chunk.beats = beat_cap - used
+                m_voices[voice].append(chunk)
+                overflowing.beats -= chunk.beats
+                overflowing.lyric = None
+                overflowing.lyric_syllable_id = None
+                overflowing.lyric_mode = "tie_continue"
+                used += chunk.beats
 
             if used < beat_cap:
                 m_voices[voice].append(ScoreNote(pitch="REST", beats=beat_cap - used, is_rest=True, section_id="padding"))
@@ -978,6 +1132,18 @@ def _align_verse_syllables_to_template(section_id: str, syllables: list[ScoreSyl
     return aligned
 
 
+
+
+def _count_full_measures_for_section(score: CanonicalScore, section_id: str, beat_cap: float) -> int:
+    total_beats = 0.0
+    for measure in score.measures:
+        total_beats += sum(
+            note.beats
+            for note in measure.voices["soprano"]
+            if note.section_id == section_id and not note.is_rest
+        )
+    return int(total_beats // beat_cap)
+
 def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
@@ -995,9 +1161,6 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     sections: list[ScoreSection] = []
     section_plans: list[tuple[str, str, bool, str, float, list[dict]]] = []
     beat_cap = beats_per_measure(ts)
-    verse_length_scale = 1.0
-    if req.preferences.bars_per_verse:
-        verse_length_scale = max(0.6, min(1.8, req.preferences.bars_per_verse / 16.0))
 
     section_defs = {section.id or f"section-{idx}": section for idx, section in enumerate(req.sections, start=1)}
     arranged_instances = _expand_arrangement(req)
@@ -1017,6 +1180,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     verse_rhythm_template: list[dict] | None = None
     verse_template_anacrusis_beats: float | None = None
     verse_template_phrase_end_indices: list[int] = []
+    verse_phrase_bar_targets: list[int] = []
     verse_music_unit_form: VerseMusicUnitForm | None = None
 
     for idx, (
@@ -1054,17 +1218,38 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             syllable_count=len(syllables),
             seed=pickup_seed,
         )
+        if is_verse and req.preferences.bars_per_verse is not None and anacrusis_mode == "auto":
+            anacrusis_beats = 0.0
         rhythm_plan = plan_syllable_rhythm(
             syllables,
             beat_cap,
             rhythm_config,
             rhythm_seed,
             initial_offset_beats=anacrusis_beats,
-            length_scale=verse_length_scale,
         )
 
         if is_verse:
             if verse_rhythm_template is None:
+                verse_template_anacrusis_beats = anacrusis_beats
+                verse_template_phrase_end_indices = phrase_end_indices_from_blocks
+                if req.preferences.bars_per_verse is not None:
+                    verse_phrase_bar_targets = verse_form_planner.allocate_phrase_bar_targets(
+                        syllables=syllables,
+                        phrase_end_syllable_indices=verse_template_phrase_end_indices,
+                    )
+                    rhythm_plan = verse_form_planner.enforce_phrase_bar_targets(
+                        rhythm_plan=rhythm_plan,
+                        phrase_end_syllable_indices=verse_template_phrase_end_indices,
+                        phrase_bar_targets=verse_phrase_bar_targets,
+                        pickup_beats=anacrusis_beats,
+                        syllable_count=len(syllables),
+                    )
+                else:
+                    verse_phrase_bar_targets = verse_form_planner.phrase_bar_targets_from_rhythm_plan(
+                        pickup_beats=anacrusis_beats,
+                        phrase_end_syllable_indices=verse_template_phrase_end_indices,
+                        rhythm_plan=rhythm_plan,
+                    )
                 verse_rhythm_template = [
                     {
                         "durations": list(item["durations"]),
@@ -1073,8 +1258,6 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     }
                     for item in rhythm_plan
                 ]
-                verse_template_anacrusis_beats = anacrusis_beats
-                verse_template_phrase_end_indices = phrase_end_indices_from_blocks
                 if max_verse_syllable_count > len(verse_rhythm_template):
                     expanded_template, expanded_phrase_end_indices, splits_count = _expand_verse_template_slots(
                         verse_rhythm_template,
@@ -1157,8 +1340,9 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             if verse_rhythm_template:
                 verse_music_unit_form = verse_form_planner.plan(
                     pickup_beats=verse_template_anacrusis_beats or 0.0,
+                    bars_per_verse=max(1, req.preferences.bars_per_verse or (verse_phrase_bar_targets[-1] if verse_phrase_bar_targets else 1)),
                     phrase_end_syllable_indices=verse_template_phrase_end_indices,
-                    rhythm_plan=rhythm_plan,
+                    phrase_bar_targets=verse_phrase_bar_targets,
                     rhythm_template=verse_rhythm_template,
                 ).to_music_unit_form(music_unit_id)
 
@@ -1371,14 +1555,9 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
     if score.meta.verse_music_unit_form is not None:
         verse_sections = [section.id for section in score.sections if section.is_verse]
-        spans: dict[str, set[int]] = {}
-        for measure in score.measures:
-            for note in measure.voices["soprano"]:
-                if note.section_id in verse_sections:
-                    spans.setdefault(note.section_id, set()).add(measure.number)
         expected_count = score.meta.verse_music_unit_form.total_measure_count
         for section_id in verse_sections[1:]:
-            actual = len(spans.get(section_id, set()))
+            actual = _count_full_measures_for_section(score, section_id, beat_cap)
             if actual != expected_count:
                 log_event(
                     logger,
@@ -1433,6 +1612,16 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
 
         score = normalize_score_for_rendering(score)
         errs = validate_score(score, primary_mode)
+        if req.preferences.bars_per_verse is not None:
+            non_blocking_prefixes = (
+                "Lyric phrase ending",
+                "Orphan melodic note",
+                "Soprano strong-beat note",
+            )
+            if errs and all(err.startswith(non_blocking_prefixes) for err in errs):
+                log_event(logger, "validation_soft_pass", stage="melody_generation", attempt=attempt, diagnostics=errs)
+                log_event(logger, "melody_generation_completed", attempt=attempt, soft_validated=True)
+                return score
         if not errs:
             log_event(logger, "validation_passed", stage="melody_generation", attempt=attempt)
             log_event(logger, "melody_generation_completed", attempt=attempt)

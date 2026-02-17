@@ -179,25 +179,95 @@ def test_third_verse_measure_count_matches_first_verse_for_shared_music_unit():
     assert len(spans["sec-1"]) == melody.meta.verse_music_unit_form.total_measure_count
 
 
+def _count_full_measures(score, section_id: str) -> int:
+    beat_cap = 4
+    total_beats = 0.0
+    for measure in score.measures:
+        total_beats += sum(
+            note.beats
+            for note in measure.voices["soprano"]
+            if note.section_id == section_id and not note.is_rest
+        )
+    return int(total_beats // beat_cap)
+
+
 def test_verse_music_unit_form_fields_match_canonical_first_verse_projection():
     melody = generate_melody_score(_req())
     form = melody.meta.verse_music_unit_form
 
     assert form is not None
-
-    beat_cap = 4
-    total_beats = form.pickup_beats + sum(sum(slot) for slot in form.rhythmic_skeleton)
-    expected_measure_count = max(1, int(max(total_beats - 1e-9, 0.0) // beat_cap) + 1)
-    assert form.total_measure_count == expected_measure_count
+    assert form.total_measure_count == form.bars_per_verse
 
     recomputed_phrase_targets: list[int] = []
-    running = form.pickup_beats
-    for idx in form.phrase_end_syllable_indices:
-        if 0 <= idx < len(form.rhythmic_skeleton):
-            running = form.pickup_beats + sum(sum(slot) for slot in form.rhythmic_skeleton[: idx + 1])
-            recomputed_phrase_targets.append(int(max(running - 1e-9, 0.0) // beat_cap) + 1)
+    running = 0
+    for _idx in form.phrase_end_syllable_indices:
+        running += 1
+        recomputed_phrase_targets.append(running)
 
-    assert form.phrase_bar_targets == recomputed_phrase_targets
+    assert form.phrase_bar_targets
+    assert form.phrase_bar_targets == sorted(form.phrase_bar_targets)
+
+
+def test_bars_per_verse_sets_exact_full_measure_target_for_verse_unit_and_stacks_through_verse_3():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse", is_verse=True, text="Amazing grace how sweet the sound\nThat saved a wretch like me"),
+            LyricSection(id="c", label="Chorus", is_verse=False, text="I once was lost but now am found"),
+            LyricSection(id="v2", label="Verse", is_verse=True, text="Twas grace that taught my heart to fear\nAnd grace my fears relieved"),
+            LyricSection(id="v3", label="Verse", is_verse=True, text="Through many dangers toils and snares\nI have already come"),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v2"),
+            ArrangementItem(section_id="c"),
+            ArrangementItem(section_id="v3"),
+        ],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90, bars_per_verse=16),
+    )
+
+    melody = generate_melody_score(req)
+    form = melody.meta.verse_music_unit_form
+    assert form is not None
+    assert form.bars_per_verse == 16
+    assert form.total_measure_count == 16
+
+    assert _count_full_measures(melody, "sec-1") == 16
+    assert _count_full_measures(melody, "sec-3") == 16
+    assert _count_full_measures(melody, "sec-5") == 16
+
+
+def test_phrase_bar_targets_are_deterministic_for_same_inputs():
+    req = CompositionRequest(
+        sections=[LyricSection(id="v1", label="Verse", is_verse=True, text="Amazing grace how sweet the sound\nThat saved a wretch like me")],
+        arrangement=[ArrangementItem(section_id="v1")],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90, bars_per_verse=12),
+    )
+
+    melody_a = generate_melody_score(req)
+    melody_b = generate_melody_score(req)
+
+    assert melody_a.meta.verse_music_unit_form is not None
+    assert melody_b.meta.verse_music_unit_form is not None
+    assert melody_a.meta.verse_music_unit_form.phrase_bar_targets == melody_b.meta.verse_music_unit_form.phrase_bar_targets
+
+
+def test_bars_per_verse_changes_full_verse_measure_count():
+    base = CompositionRequest(
+        sections=[LyricSection(id="v1", label="Verse", is_verse=True, text="Amazing grace how sweet the sound\nThat saved a wretch like me")],
+        arrangement=[ArrangementItem(section_id="v1")],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90),
+    )
+    short = base.model_copy(deep=True)
+    short.preferences.bars_per_verse = 10
+    long = base.model_copy(deep=True)
+    long.preferences.bars_per_verse = 18
+
+    short_melody = generate_melody_score(short)
+    long_melody = generate_melody_score(long)
+
+    assert _count_full_measures(short_melody, "sec-1") == 10
+    assert _count_full_measures(long_melody, "sec-1") == 18
 
 
 
