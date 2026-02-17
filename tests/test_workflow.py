@@ -276,52 +276,74 @@ def test_generate_melody_amazing_grace_respects_16_bars_per_verse_and_stacks_to_
 
 
 
-def test_generate_melody_34_pickup_shorter_later_verse_is_padded_to_expected_measure_count():
-    payload = {
+def test_generate_melody_34_pickup_bars_per_verse_16_stretches_lyric_bearing_durations_without_lyricless_padding():
+    base_payload = {
         "sections": [
             {
                 "id": "v1",
                 "label": "Verse",
                 "is_verse": True,
                 "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
-            },
-            {
-                "id": "v2",
-                "label": "Verse",
-                "is_verse": True,
-                "text": "Grace still leads me home",
-            },
-            {
-                "id": "v3",
-                "label": "Verse",
-                "is_verse": True,
-                "text": "Through many dangers toils and snares\nI have already come",
-            },
+            }
         ],
         "arrangement": [
-            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
-            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
-            {"section_id": "v3", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2}
         ],
-        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90},
     }
 
-    res = client.post("/api/generate-melody", json=payload)
+    baseline_payload = {**base_payload, "preferences": {**base_payload["preferences"], "bars_per_verse": 8}}
+    target_payload = {**base_payload, "preferences": {**base_payload["preferences"], "bars_per_verse": 16}}
 
-    assert res.status_code == 200
-    score = res.json()["score"]
+    baseline_res = client.post("/api/generate-melody", json=baseline_payload)
+    target_res = client.post("/api/generate-melody", json=target_payload)
 
-    def measures_for(section_id: str) -> int:
+    assert baseline_res.status_code == 200
+    assert target_res.status_code == 200
+
+    target_score = target_res.json()["score"]
+
+    def measures_for(score: dict, section_id: str) -> int:
         return sum(
             1
             for measure in score["measures"]
             if any(note["section_id"] == section_id for note in measure["voices"]["soprano"])
         )
 
-    assert measures_for("sec-1") == 16
-    assert measures_for("sec-2") == 16
-    assert measures_for("sec-3") == 16
+    assert measures_for(target_score, "sec-1") == 16
 
+    first_measure = target_score["measures"][0]["voices"]["soprano"]
+    first_measure_nonpickup = sum(
+        note["beats"]
+        for note in first_measure
+        if note["section_id"] == "sec-1" and not note["is_rest"]
+    )
+    assert first_measure_nonpickup == 1
+
+    verse_lyricless = [
+        idx
+        for idx, note in enumerate(
+            n
+            for measure in target_score["measures"]
+            for n in measure["voices"]["soprano"]
+            if n["section_id"] == "sec-1"
+        )
+        if (not note["is_rest"]) and note["lyric_syllable_id"] is None
+    ]
+    assert verse_lyricless == []
+
+    def avg_syllable_duration(score: dict, section_id: str) -> float:
+        beats_by_syllable: dict[str, float] = {}
+        for measure in score["measures"]:
+            for note in measure["voices"]["soprano"]:
+                if note["section_id"] != section_id or note["is_rest"] or note["lyric_syllable_id"] is None:
+                    continue
+                beats_by_syllable[note["lyric_syllable_id"]] = beats_by_syllable.get(note["lyric_syllable_id"], 0.0) + note["beats"]
+        return sum(beats_by_syllable.values()) / max(1, len(beats_by_syllable))
+
+    baseline_avg = avg_syllable_duration(baseline_res.json()["score"], "sec-1")
+    target_avg = avg_syllable_duration(target_score, "sec-1")
+    assert target_avg > baseline_avg
 
 
 def test_generate_melody_34_manual_pickup_amazing_grace_three_verses_stays_at_16_measures_each():
