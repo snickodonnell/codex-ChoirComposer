@@ -1441,20 +1441,21 @@ function buildTimedPlaybackEvents(events, pauseSeconds) {
   let cursor = 0;
   let previousSectionId = null;
   const timedEvents = events.map((event) => {
-    if (previousSectionId && event.sectionId && event.sectionId !== previousSectionId) {
+    const currentSectionId = event.sectionId && event.sectionId !== 'padding' ? event.sectionId : previousSectionId;
+    if (previousSectionId && currentSectionId && currentSectionId !== previousSectionId) {
       cursor += pauseSeconds;
     }
     const current = { pitches: event.pitches, seconds: event.seconds, time: cursor };
     cursor += event.seconds;
-    previousSectionId = event.sectionId || previousSectionId;
+    previousSectionId = currentSectionId || previousSectionId;
     return current;
   });
   return { timedEvents, totalSeconds: cursor };
 }
 
 function arrangementPauseSeconds(score) {
-  const { beatsPerMeasure } = parseTimeSignature(score?.meta?.time_signature);
-  return (60 / score.meta.tempo_bpm) * beatsPerMeasure;
+  void score;
+  return 1;
 }
 
 startMelodyBtn.onclick = async () => {
