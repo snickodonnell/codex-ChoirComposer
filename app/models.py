@@ -38,6 +38,8 @@ class ArrangementItem(BaseModel):
     section_id: str = Field(min_length=1, max_length=120)
     pause_beats: float = Field(default=0, ge=0, le=4)
     progression_cluster: str | None = Field(default=None, min_length=1, max_length=80)
+    anacrusis_mode: Literal["off", "auto", "manual"] = "off"
+    anacrusis_beats: float = Field(default=0, ge=0, le=4)
     phrase_blocks: list["PhraseBlock"] = Field(default_factory=list)
 
 
@@ -135,6 +137,7 @@ class ScoreSection(BaseModel):
     id: str
     label: SectionLabel = Field(min_length=1, max_length=80)
     pause_beats: float = Field(default=0, ge=0, le=4)
+    anacrusis_beats: float = Field(default=0, ge=0, le=4)
     lyrics: str
     syllables: list[ScoreSyllable]
 

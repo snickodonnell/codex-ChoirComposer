@@ -216,6 +216,112 @@ def test_phrase_blocks_with_breath_marker_enforce_phrase_boundary_and_keep_timin
     assert beats_with_breath == beats_without_breath
 
 
+
+def test_anacrusis_auto_mode_biases_off_unless_bar_fit_is_strong():
+    assert composer_service._recommend_anacrusis_beats(6, 4) == 0.0
+    assert composer_service._recommend_anacrusis_beats(9, 4) == 1.0
+
+
+def test_manual_anacrusis_adds_pickup_rest_and_updates_first_chord_degree():
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="glory forever rising now")],
+        arrangement=[
+            ArrangementItem(
+                section_id="verse-1",
+                progression_cluster="Verse A",
+                anacrusis_mode="manual",
+                anacrusis_beats=1,
+            )
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="syllabic"),
+    )
+
+    melody = generate_melody_score(req)
+    first_note = melody.measures[0].voices["soprano"][0]
+
+    assert first_note.is_rest is True
+    assert first_note.beats == 1
+    assert melody.chord_progression[0].degree == 5
+
+
+def test_auto_anacrusis_is_deterministic_for_same_request_inputs():
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="glory forever rising now in wonder")],
+        arrangement=[ArrangementItem(section_id="verse-1", progression_cluster="Verse", anacrusis_mode="auto")],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed", key="C", tempo_bpm=88),
+    )
+
+    melody_a = generate_melody_score(req)
+    melody_b = generate_melody_score(req)
+
+    assert melody_a.model_dump() == melody_b.model_dump()
+
+
+def test_phrase_boundary_stays_on_barline_with_manual_pickup_and_no_syllable_bleed():
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="glory rises now\nforever we sing")],
+        arrangement=[
+            ArrangementItem(
+                section_id="verse-1",
+                progression_cluster="Verse",
+                anacrusis_mode="manual",
+                anacrusis_beats=1,
+                phrase_blocks=[
+                    PhraseBlock(text="glory rises now", merge_with_next_phrase=False),
+                    PhraseBlock(text="forever we sing", merge_with_next_phrase=False),
+                ],
+            )
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed", key="C", tempo_bpm=88),
+    )
+
+    melody = generate_melody_score(req)
+    section = melody.sections[0]
+    first_phrase_end = next(s for s in section.syllables if s.phrase_end_after)
+    second_phrase_first_word = next(s.word_text.lower() for s in section.syllables if s.word_index > first_phrase_end.word_index)
+
+    beat_pos = 0.0
+    phrase_end_pos = None
+    phrase_end_idx = None
+    second_phrase_start_idx = None
+    for idx, note in enumerate([n for m in melody.measures for n in m.voices["soprano"]]):
+        beat_pos += note.beats
+        if note.lyric_syllable_id == first_phrase_end.id:
+            phrase_end_pos = beat_pos
+            phrase_end_idx = idx
+        if second_phrase_start_idx is None and note.lyric and note.lyric.lower() in second_phrase_first_word:
+            second_phrase_start_idx = idx
+
+    assert phrase_end_pos is not None
+    assert abs(phrase_end_pos % 4) < 1e-9
+    assert second_phrase_start_idx is not None and phrase_end_idx is not None
+    assert second_phrase_start_idx > phrase_end_idx
+
+
+def test_pickup_measure_capacity_validation_rule_is_enforced():
+    req = CompositionRequest(
+        sections=[LyricSection(id="verse-1", label="verse", text="glory forever rising now")],
+        arrangement=[ArrangementItem(section_id="verse-1", anacrusis_mode="manual", anacrusis_beats=1)],
+        preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="syllabic", key="C"),
+    )
+    melody = generate_melody_score(req)
+    assert validate_score(melody) == []
+
+    satb = harmonize_score(melody)
+    section_id = satb.sections[0].id
+    for voice in ["soprano", "alto", "tenor", "bass"]:
+        per_measure_nonpickup = []
+        for measure in satb.measures:
+            nonpickup = sum(
+                note.beats
+                for note in measure.voices[voice]
+                if note.section_id == section_id and not note.is_rest
+            )
+            if nonpickup > 0:
+                per_measure_nonpickup.append(nonpickup)
+        assert per_measure_nonpickup[0] == 3
+        assert all(abs(v - 4) < 1e-9 for v in per_measure_nonpickup[1:])
+
 def test_continuation_notes_do_not_repeat_lyric_text():
     req = CompositionRequest(
         sections=[LyricSection(label="chorus", text="Gloria in excelsis deo")],
