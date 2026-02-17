@@ -180,6 +180,65 @@ def test_refine_satb_rejects_melody_input_stage():
     assert res.json()["detail"]["request_id"]
 
 
+
+
+def test_refine_melody_regenerate_manual_pickups_preserves_full_harmony_coverage():
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Twas grace that taught my heart to fear\nAnd grace my fears relieved",
+            },
+            {
+                "id": "v3",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Through many dangers toils and snares\nI have already come",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v3", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+        ],
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+    }
+
+    generate_res = client.post("/api/generate-melody", json=payload)
+
+    assert generate_res.status_code == 200
+    melody = generate_res.json()["score"]
+    original_degrees = [ch["degree"] for ch in melody["chord_progression"]]
+
+    refine_res = client.post(
+        "/api/refine-melody",
+        json={
+            "score": melody,
+            "instruction": "fresh melodic idea",
+            "regenerate": True,
+            "selected_units": ["verse"],
+            "section_clusters": {"sec-1": "verse", "sec-2": "verse", "sec-3": "verse"},
+        },
+    )
+
+    assert refine_res.status_code == 200
+    refined_score = refine_res.json()["score"]
+    refined_degrees = [ch["degree"] for ch in refined_score["chord_progression"]]
+    measure_numbers = {measure["number"] for measure in refined_score["measures"]}
+    chord_measures = {chord["measure_number"] for chord in refined_score["chord_progression"]}
+
+    assert refined_degrees != original_degrees
+    assert measure_numbers == chord_measures
+    assert len(refined_score["chord_progression"]) == len(refined_score["measures"]) == 48
+
 def test_request_id_header_present_on_response():
     req = _sample_request()
 

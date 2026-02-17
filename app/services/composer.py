@@ -39,7 +39,7 @@ from app.services.music_theory import (
     pitch_to_midi,
     triad_pitch_classes,
 )
-from app.services.score_normalization import normalize_score_for_rendering
+from app.services.score_normalization import ensure_chord_symbols_complete, normalize_score_for_rendering
 from app.services.score_validation import beats_per_measure, validate_score, validate_score_diagnostics
 
 MAX_MELODIC_LEAP = 7
@@ -1962,6 +1962,7 @@ def refine_score(
         prev = midi
         cursor += note.beats
 
+    score = ensure_chord_symbols_complete(score)
     score.meta.rationale = f"Refined while preserving progression authority: {instruction}"
     diagnostics = validate_score_diagnostics(score)
     if diagnostics.fatal:

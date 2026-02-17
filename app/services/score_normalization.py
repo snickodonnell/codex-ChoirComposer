@@ -34,12 +34,8 @@ def normalize_score_for_rendering(score: CanonicalScore) -> CanonicalScore:
             )
         )
 
-    normalized = score.model_copy(
-        update={
-            "measures": normalized_measures,
-            "chord_progression": _normalize_harmony_coverage(score, normalized_measures),
-        }
-    )
+    normalized = score.model_copy(update={"measures": normalized_measures})
+    normalized = ensure_chord_symbols_complete(normalized)
     added_measure_padding = max(0, measure_count - len(score.measures))
     log_event(
         logger,
@@ -114,32 +110,52 @@ def _rest(beats: float) -> ScoreNote:
     return ScoreNote(pitch="REST", beats=beats, is_rest=True, section_id="padding")
 
 
-def _normalize_harmony_coverage(score: CanonicalScore, measures: list[ScoreMeasure]) -> list[ScoreChord]:
-    measure_count = len(measures)
+def ensure_chord_symbols_complete(score: CanonicalScore) -> CanonicalScore:
+    measure_count = len(score.measures)
     scale = parse_key(score.meta.key, score.meta.primary_mode)
     existing: dict[int, ScoreChord] = {}
     for chord in sorted(score.chord_progression, key=lambda ch: ch.measure_number):
         if 1 <= chord.measure_number <= measure_count and chord.measure_number not in existing:
             existing[chord.measure_number] = chord
 
+    before_count = len(existing)
+    missing_measures = [measure_number for measure_number in range(1, measure_count + 1) if measure_number not in existing]
+
     repaired: list[ScoreChord] = []
+    previous_chord: ScoreChord | None = None
     for measure_number in range(1, measure_count + 1):
         chord = existing.get(measure_number)
         if chord:
             repaired.append(chord)
+            previous_chord = chord
             continue
-        section_id = _first_section_id(measures[measure_number - 1])
+
+        section_id = _first_section_id(score.measures[measure_number - 1])
+        if previous_chord is not None:
+            degree = previous_chord.degree if 1 <= previous_chord.degree <= 7 else 1
+        else:
+            degree = 1
         repaired.append(
             ScoreChord(
                 measure_number=measure_number,
                 section_id=section_id,
-                degree=1,
-                symbol=chord_symbol(scale, 1),
-                pitch_classes=triad_pitch_classes(scale, 1),
+                degree=degree,
+                symbol=chord_symbol(scale, degree),
+                pitch_classes=triad_pitch_classes(scale, degree),
             )
         )
+        previous_chord = repaired[-1]
 
-    return repaired
+    log_event(
+        logger,
+        "harmony_coverage_before_after",
+        before_count=before_count,
+        after_count=len(repaired),
+        measure_count=measure_count,
+        missing_measures=missing_measures,
+    )
+
+    return score.model_copy(update={"chord_progression": repaired})
 
 
 def _first_section_id(measure: ScoreMeasure) -> str:
