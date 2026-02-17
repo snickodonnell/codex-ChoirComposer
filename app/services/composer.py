@@ -2041,10 +2041,13 @@ def harmonize_score(score: CanonicalScore) -> CanonicalScore:
         chord_progression=score.chord_progression,
     )
     satb = normalize_score_for_rendering(satb)
-    errs = validate_score(satb)
-    if errs:
-        log_event(logger, "validation_failed", level=logging.ERROR, stage="harmonize_score", diagnostics=errs)
+    diagnostics = validate_score_diagnostics(satb)
+    if diagnostics.fatal:
+        log_event(logger, "validation_failed", level=logging.ERROR, stage="harmonize_score", diagnostics=diagnostics.fatal)
         raise ValueError("SATB score failed validation.")
-    log_event(logger, "validation_passed", stage="harmonize_score")
+    if diagnostics.warnings:
+        log_event(logger, "validation_failed", level=logging.WARNING, stage="harmonize_score", diagnostics=diagnostics.warnings)
+    else:
+        log_event(logger, "validation_passed", stage="harmonize_score")
     log_event(logger, "rendering_completed", target="satb")
     return satb
