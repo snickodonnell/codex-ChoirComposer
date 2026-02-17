@@ -181,6 +181,16 @@ class ScoreMeta(BaseModel):
     stage: Literal["melody", "satb"]
     rationale: str
     arrangement_music_units: list["ArrangementMusicUnit"] = Field(default_factory=list)
+    verse_music_unit_form: "VerseMusicUnitForm | None" = None
+
+
+class VerseMusicUnitForm(BaseModel):
+    music_unit_id: str = Field(min_length=1, max_length=80)
+    pickup_beats: float = Field(default=0, ge=0, le=4)
+    total_measure_count: int = Field(ge=1)
+    phrase_end_syllable_indices: list[int] = Field(default_factory=list)
+    phrase_bar_targets: list[int] = Field(default_factory=list)
+    rhythmic_skeleton: list[list[float]] = Field(default_factory=list)
 
 
 class ArrangementMusicUnit(BaseModel):
