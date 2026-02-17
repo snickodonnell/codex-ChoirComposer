@@ -856,16 +856,16 @@ function loadHymnTestData() {
   const sections = [
     { label: 'Verse', is_verse: true, text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
     { label: 'Verse', is_verse: true, text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
-    { label: 'Chorus', is_verse: false, text: 'Praise God, praise God\nWe sing with grateful voices' },
+    { label: 'Verse', is_verse: true, text: "Through many dangers, toils, and snares\nI have already come\n'Tis grace hath brought me safe thus far\nAnd grace will lead me home" },
   ];
 
   clearSectionsAndArrangement();
   sections.forEach((section) => addSectionRow(section.label, section.text, section.is_verse || false));
 
   const rows = getSectionRows();
-  addArrangementItem(rows[0]?.dataset.sectionId);
-  addArrangementItem(rows[1]?.dataset.sectionId);
-  addArrangementItem(rows[2]?.dataset.sectionId);
+  addArrangementItem(rows[0]?.dataset.sectionId, null, 'manual', 2);
+  addArrangementItem(rows[1]?.dataset.sectionId, null, 'manual', 2);
+  addArrangementItem(rows[2]?.dataset.sectionId, null, 'manual', 2);
 
   document.getElementById('key').value = 'G';
   document.getElementById('primaryMode').value = 'major';
