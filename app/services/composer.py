@@ -39,6 +39,7 @@ from app.services.score_validation import beats_per_measure, validate_score
 
 MAX_MELODIC_LEAP = 7
 MAX_GENERATION_ATTEMPTS = 5
+MAX_IDENTICAL_CONSECUTIVE_PITCHES = 3
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,63 @@ def _nearest_pitch_class_with_leap(target: int, previous: int, pitch_classes: se
     candidates = [m for m in range(lo, hi + 1) if m % 12 in pitch_classes and abs(m - previous) <= MAX_MELODIC_LEAP]
     if not candidates:
         return _nearest_pitch_class(target, pitch_classes, lo, hi)
-    return min(candidates, key=lambda m: (abs(m - target), abs(m - previous), m))
+    return min(candidates, key=lambda m: (abs(m - target), _melodic_leap_penalty(abs(m - previous)), m))
+
+
+def _melodic_leap_penalty(leap_size: int) -> float:
+    if leap_size <= 2:
+        return float(leap_size)
+    if leap_size <= 4:
+        return leap_size - 1.0
+    return float(leap_size) + 1.5
+
+
+def _phrase_note_totals(rhythm_plan: list[dict], phrase_end_ids: set[str]) -> list[int]:
+    totals: list[int] = []
+    running = 0
+    for item in rhythm_plan:
+        running += len(item["durations"])
+        if item["syllable_id"] in phrase_end_ids:
+            totals.append(running)
+            running = 0
+    if running > 0:
+        totals.append(running)
+    return totals or [1]
+
+
+
+
+def _initial_identical_pitch_run(notes: list[ScoreNote]) -> tuple[int, int | None]:
+    sung = [n for n in notes if not n.is_rest]
+    if not sung:
+        return 0, None
+
+    last_pitch = pitch_to_midi(sung[-1].pitch)
+    run = 0
+    for note in reversed(sung):
+        midi = pitch_to_midi(note.pitch)
+        if midi != last_pitch:
+            break
+        run += 1
+    return run, last_pitch
+
+def _apply_repetition_guardrail(
+    candidate: int,
+    previous_pitch: int,
+    identical_count: int,
+    scale_set: set[int],
+    contour_direction: int,
+) -> int:
+    if identical_count < MAX_IDENTICAL_CONSECUTIVE_PITCHES:
+        return candidate
+
+    direction = 1 if contour_direction >= 0 else -1
+    for delta in (direction, -direction, direction * 2, -direction * 2):
+        moved = _constrain_melodic_candidate(previous_pitch + delta, previous_pitch, "soprano", scale_set)
+        if moved != previous_pitch:
+            return moved
+
+    return candidate
 
 
 def _cluster_progression_cycle(_scale, cluster_label: str) -> list[int]:
@@ -448,10 +505,59 @@ def _repair_soprano_strong_beats(score: CanonicalScore, primary_mode: str | None
         cursor += note.beats
 
 
+def _repair_phrase_end_stability(score: CanonicalScore, primary_mode: str | None) -> None:
+    if score.meta.stage != "melody":
+        return
+
+    bpb = beats_per_measure(score.meta.time_signature)
+    scale_set = set(parse_key(score.meta.key, primary_mode).semitones)
+    chord_by_measure = {ch.measure_number: ch for ch in score.chord_progression}
+    tonic_tones = set(triad_pitch_classes(parse_key(score.meta.key, primary_mode), 1))
+    phrase_end_ids = {
+        syllable.id
+        for section in score.sections
+        for syllable in section.syllables
+        if syllable.phrase_end_after
+    }
+    if not phrase_end_ids:
+        return
+
+    soprano = _flatten_voice(score, "soprano")
+    last_index_by_syllable: dict[str, int] = {}
+    for idx, note in enumerate(soprano):
+        if note.is_rest or note.lyric_syllable_id is None:
+            continue
+        last_index_by_syllable[note.lyric_syllable_id] = idx
+
+    prev = None
+    cursor = 0.0
+    for idx, note in enumerate(soprano):
+        if note.is_rest:
+            cursor += note.beats
+            continue
+        midi = pitch_to_midi(note.pitch)
+        basis = midi if prev is None else prev
+        end_pos = cursor + note.beats
+        syllable_id = note.lyric_syllable_id
+        if syllable_id in phrase_end_ids and last_index_by_syllable.get(syllable_id) == idx:
+            end_measure = int(max(end_pos - 1e-9, 0.0) // bpb) + 1
+            chord = chord_by_measure.get(end_measure)
+            tones = set(chord.pitch_classes) if chord else scale_set
+            stable_tones = tonic_tones if chord and chord.degree == 1 else tones
+            midi = _nearest_pitch_class_with_leap(midi, basis, stable_tones, "soprano")
+            midi = _constrain_melodic_candidate(midi, basis, "soprano", scale_set)
+            midi = _nearest_pitch_class_with_leap(midi, basis, stable_tones, "soprano")
+            note.pitch = midi_to_pitch(midi)
+
+        prev = pitch_to_midi(note.pitch)
+        cursor = end_pos
+
+
 def _auto_repair_melody_score(score: CanonicalScore, primary_mode: str | None) -> CanonicalScore:
     _repair_missing_chords(score, primary_mode)
     _repair_key_mode_mismatch(score, primary_mode)
     _repair_soprano_strong_beats(score, primary_mode)
+    _repair_phrase_end_stability(score, primary_mode)
     _repair_phrase_end_barlines(score)
     score.chord_progression.sort(key=lambda chord: chord.measure_number)
     return normalize_score_for_rendering(score)
@@ -706,8 +812,15 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
     for section_id, label, progression_cluster, anacrusis_beats, rhythm_plan in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
-        previous_sung = next((n for n in reversed(soprano_notes) if not n.is_rest), None)
-        prev = center if previous_sung is None else pitch_to_midi(previous_sung.pitch)
+        repeated_pitch_count, previous_pitch = _initial_identical_pitch_run(soprano_notes)
+        if previous_pitch is None:
+            prev = center
+            repeated_pitch_count = 0
+        else:
+            prev = previous_pitch
+        phrase_note_totals = _phrase_note_totals(rhythm_plan, phrase_end_ids_by_section.get(section_id, set()))
+        phrase_idx = 0
+        phrase_progress = 0
 
         if anacrusis_beats > 0:
             pickup_measure = int(cursor // beat_cap) + 1
@@ -726,12 +839,21 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             step_base = random.choice([-2, -1, 0, 1, 2, 3])
             stressed_bonus = 1 if item["stressed"] else 0
             for ni, duration in enumerate(item["durations"]):
+                phrase_total = phrase_note_totals[min(phrase_idx, len(phrase_note_totals) - 1)]
+                phrase_halfway = max(1, math.ceil(phrase_total / 2))
+                contour_bias = 1 if phrase_progress < phrase_halfway else -1
+
                 measure_number = int(cursor // beat_cap) + 1
                 measure_beat = cursor % beat_cap
                 chord = chord_by_measure.get(measure_number)
                 chord_tones = set(chord.pitch_classes if chord else scale.semitones)
 
-                step = step_base + (1 if (item["stressed"] and ni == 0 and step_base < 2) else 0) - stressed_bonus
+                step = (
+                    step_base
+                    + (1 if (item["stressed"] and ni == 0 and step_base < 2) else 0)
+                    - stressed_bonus
+                    + contour_bias
+                )
                 mode = item["modes"][ni]
                 candidate = _constrain_melodic_candidate(prev + step, prev, "soprano", scale_set)
 
@@ -748,8 +870,20 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     item["syllable_id"] in phrase_end_ids_by_section.get(item["section_id"], set())
                     and ni == len(item["durations"]) - 1
                 )
+                if mode != "tie_continue":
+                    candidate = _apply_repetition_guardrail(
+                        candidate,
+                        prev,
+                        repeated_pitch_count,
+                        scale_set,
+                        contour_bias,
+                    )
+
                 if is_phrase_end_note:
-                    stable_tones = tonic_stable_tones if chord and chord.degree == 1 else chord_tones
+                    cadence_measure = int(max(cursor + duration - 1e-9, 0.0) // beat_cap) + 1
+                    cadence_chord = chord_by_measure.get(cadence_measure, chord)
+                    cadence_tones = set(cadence_chord.pitch_classes if cadence_chord else chord_tones)
+                    stable_tones = tonic_stable_tones if cadence_chord and cadence_chord.degree == 1 else cadence_tones
                     candidate = _nearest_pitch_class_with_leap(candidate, prev, stable_tones, "soprano")
                     candidate = _constrain_melodic_candidate(candidate, prev, "soprano", scale_set)
                     candidate = _nearest_pitch_class_with_leap(candidate, prev, stable_tones, "soprano")
@@ -767,7 +901,12 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                         lyric_index=item["lyric_index"],
                     )
                 )
+                repeated_pitch_count = repeated_pitch_count + 1 if candidate == prev else 1
                 prev = candidate
+                phrase_progress += 1
+                if is_phrase_end_note:
+                    phrase_idx += 1
+                    phrase_progress = 0
                 cursor += duration
 
 

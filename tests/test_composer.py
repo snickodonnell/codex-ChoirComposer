@@ -868,3 +868,64 @@ def test_normalize_score_for_rendering_splits_cross_measure_notes_and_fills_harm
     _assert_measure_complete(normalized)
     assert len(normalized.measures) == 2
     assert len(normalized.chord_progression) == 2
+
+
+def test_melody_guardrail_limits_identical_consecutive_pitches():
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="holy holy holy holy holy holy holy holy")],
+        preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=88, lyric_rhythm_preset="syllabic"),
+    )
+    melody = generate_melody_score(req)
+    soprano = [n for m in melody.measures for n in m.voices["soprano"] if not n.is_rest]
+
+    max_run = 0
+    run = 0
+    prev_pitch = None
+    for note in soprano:
+        if note.lyric_mode == "tie_continue":
+            continue
+        midi = pitch_to_midi(note.pitch)
+        if midi == prev_pitch:
+            run += 1
+        else:
+            run = 1
+        prev_pitch = midi
+        max_run = max(max_run, run)
+
+    assert max_run <= 3
+
+
+def test_phrase_contour_bias_prefers_up_then_down_motion():
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="morning mercy rises now\nsteady light is falling soft")],
+        preferences=CompositionPreferences(time_signature="4/4", key="D", tempo_bpm=92, lyric_rhythm_preset="mixed"),
+    )
+    melody = generate_melody_score(req)
+
+    section = melody.sections[0]
+    phrase_end_ids = {s.id for s in section.syllables if s.phrase_end_after}
+    soprano = [n for m in melody.measures for n in m.voices["soprano"] if not n.is_rest]
+
+    phrases = []
+    current = []
+    for note in soprano:
+        current.append(note)
+        if note.lyric_syllable_id in phrase_end_ids:
+            phrases.append(current)
+            current = []
+    if current:
+        phrases.append(current)
+
+    directional_observations = []
+    for phrase in phrases:
+        if len(phrase) < 4:
+            continue
+        pitches = [pitch_to_midi(n.pitch) for n in phrase]
+        midpoint = len(pitches) // 2
+        first_half_delta = pitches[midpoint - 1] - pitches[0]
+        second_half_delta = pitches[-1] - pitches[midpoint]
+        directional_observations.append((first_half_delta, second_half_delta))
+
+    assert directional_observations
+    assert any(first >= 0 for first, _ in directional_observations)
+    assert any(second <= 0 for _, second in directional_observations)
