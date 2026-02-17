@@ -1144,6 +1144,78 @@ def _count_full_measures_for_section(score: CanonicalScore, section_id: str, bea
         )
     return int(total_beats // beat_cap)
 
+
+def _strip_leading_pickup_rests(notes: list[ScoreNote], pickup_beats: float) -> list[ScoreNote]:
+    if pickup_beats <= 1e-9:
+        return [note.model_copy(deep=True) for note in notes]
+
+    trimmed = [note.model_copy(deep=True) for note in notes]
+    remaining = pickup_beats
+    while trimmed and remaining > 1e-9 and trimmed[0].is_rest:
+        head = trimmed[0]
+        if head.beats <= remaining + 1e-9:
+            remaining -= head.beats
+            trimmed.pop(0)
+            continue
+        head.beats -= remaining
+        remaining = 0.0
+    return trimmed
+
+def _enforce_section_measure_capacities(
+    *,
+    section_id: str,
+    notes: list[ScoreNote],
+    capacities: list[float],
+) -> list[ScoreNote]:
+    if not capacities:
+        if notes:
+            raise VerseFormConstraintError(f"Verse {section_id} has no planned measure capacities but still contains notes.")
+        return []
+
+    pending = [note.model_copy(deep=True) for note in notes]
+    pending_idx = 0
+    constrained: list[ScoreNote] = []
+
+    for capacity in capacities:
+        remaining = max(0.0, capacity)
+        while remaining > 1e-9 and pending_idx < len(pending):
+            current = pending[pending_idx]
+            take = min(current.beats, remaining)
+
+            chunk = current.model_copy(deep=True)
+            chunk.beats = take
+            constrained.append(chunk)
+
+            if current.beats - take > 1e-9:
+                current.beats -= take
+                current.lyric = None
+                if not current.is_rest:
+                    current.lyric_mode = "tie_continue"
+            else:
+                pending_idx += 1
+
+            remaining -= take
+
+        if remaining > 1e-9:
+            constrained.append(
+                ScoreNote(
+                    pitch="REST",
+                    beats=remaining,
+                    is_rest=True,
+                    lyric=None,
+                    lyric_syllable_id=None,
+                    lyric_mode="none",
+                    section_id=section_id,
+                )
+            )
+
+    if pending_idx < len(pending):
+        raise VerseFormConstraintError(
+            f"Verse {section_id} exceeds planned measure capacity ({len(capacities)} measures)."
+        )
+
+    return constrained
+
 def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
@@ -1527,6 +1599,41 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                 verse_template_notes = [soprano_notes[idx].model_copy(deep=True) for idx in note_indices]
 
 
+    if verse_music_unit_form is not None:
+        section_by_id = {section.id: section for section in sections}
+        planned_measure_count = verse_music_unit_form.total_measure_count
+        rebuilt_soprano: list[ScoreNote] = []
+        for section_id, _label, is_verse, _music_unit_id, _anacrusis_beats, _rhythm_plan in section_plans:
+            source_notes = [soprano_notes[idx].model_copy(deep=True) for idx in section_note_indices.get(section_id, [])]
+            if not is_verse:
+                rebuilt_soprano.extend(source_notes)
+                continue
+
+            section_pickup = section_by_id[section_id].anacrusis_beats if section_id in section_by_id else 0.0
+            source_notes = _strip_leading_pickup_rests(source_notes, section_pickup)
+            first_capacity = max(0.0, beat_cap - section_pickup)
+            capacities = [first_capacity] + [beat_cap] * max(0, planned_measure_count - 1)
+            constrained = _enforce_section_measure_capacities(
+                section_id=section_id,
+                notes=source_notes,
+                capacities=capacities,
+            )
+            if section_pickup > 1e-9:
+                rebuilt_soprano.append(
+                    ScoreNote(
+                        pitch="REST",
+                        beats=section_pickup,
+                        is_rest=True,
+                        lyric=None,
+                        lyric_syllable_id=None,
+                        lyric_mode="none",
+                        section_id="padding",
+                    )
+                )
+            rebuilt_soprano.extend(constrained)
+
+        soprano_notes = rebuilt_soprano
+
     measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, ts)
     score = CanonicalScore(
         meta=ScoreMeta(
@@ -1544,13 +1651,56 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         measures=measures,
         chord_progression=chord_progression,
     )
-    pickup_repair = _repair_phrase_end_barlines(score)
-    if pickup_repair:
-        log_event(
-            logger,
-            "pickup_phrase_boundary_enforcement",
-            repaired=pickup_repair,
-            reason="phrase_end_alignment_with_pickup",
+    pickup_repair = False
+    if not (score.meta.verse_music_unit_form is not None and req.preferences.bars_per_verse is not None):
+        pickup_repair = _repair_phrase_end_barlines(score)
+        if pickup_repair:
+            log_event(
+                logger,
+                "pickup_phrase_boundary_enforcement",
+                repaired=pickup_repair,
+                reason="phrase_end_alignment_with_pickup",
+            )
+
+    if score.meta.verse_music_unit_form is not None:
+        section_by_id = {section.id: section for section in score.sections}
+        notes_by_section: dict[str, list[ScoreNote]] = {section_id: [] for section_id, *_ in section_plans}
+        for note in _flatten_voice(score, "soprano"):
+            if note.section_id in notes_by_section:
+                notes_by_section[note.section_id].append(note.model_copy(deep=True))
+
+        rebuilt_soprano: list[ScoreNote] = []
+        planned_measure_count = score.meta.verse_music_unit_form.total_measure_count
+        for section_id, _label, is_verse, _music_unit_id, _anacrusis_beats, _rhythm_plan in section_plans:
+            source_notes = notes_by_section.get(section_id, [])
+            if not is_verse:
+                rebuilt_soprano.extend(source_notes)
+                continue
+
+            section_pickup = section_by_id[section_id].anacrusis_beats if section_id in section_by_id else 0.0
+            source_notes = _strip_leading_pickup_rests(source_notes, section_pickup)
+            capacities = [max(0.0, beat_cap - section_pickup)] + [beat_cap] * max(0, planned_measure_count - 1)
+            constrained = _enforce_section_measure_capacities(section_id=section_id, notes=source_notes, capacities=capacities)
+            if section_pickup > 1e-9:
+                rebuilt_soprano.append(
+                    ScoreNote(
+                        pitch="REST",
+                        beats=section_pickup,
+                        is_rest=True,
+                        lyric=None,
+                        lyric_syllable_id=None,
+                        lyric_mode="none",
+                        section_id="padding",
+                    )
+                )
+            rebuilt_soprano.extend(constrained)
+
+        score.measures = _pack_measures({"soprano": rebuilt_soprano, "alto": [], "tenor": [], "bass": []}, ts)
+        score.chord_progression = _repair_harmony_progression(
+            score.chord_progression,
+            len(score.measures),
+            key,
+            req.preferences.primary_mode,
         )
 
     if score.meta.verse_music_unit_form is not None:
