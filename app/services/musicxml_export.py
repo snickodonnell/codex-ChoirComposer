@@ -277,7 +277,7 @@ def _build_music_unit_export_plan(score: CanonicalScore) -> _MusicUnitExportPlan
             music_unit_id=unit.music_unit_id,
             anchor_section_id=anchor_section,
             fallback_section_id=section_id,
-            reason="structure_mismatch_note_counts_or_syllable_mapping",
+            reason="structure_mismatch_note_counts_or_segmentation",
         )
         exported_sections.add(section_id)
         section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else f"{unit.music_unit_id} Verse {unit.verse_index}"
@@ -366,7 +366,7 @@ def _section_structure_signatures(score: CanonicalScore) -> dict[str, tuple]:
         for voice_name in ("soprano", "alto", "tenor", "bass"):
             for note in measure.voices[voice_name]:
                 signatures.setdefault(note.section_id, []).append(
-                    (voice_name, round(note.beats, 6), note.is_rest, note.lyric_mode)
+                    (voice_name, round(note.beats, 6), note.is_rest)
                 )
     return {section_id: tuple(signature) for section_id, signature in signatures.items()}
 

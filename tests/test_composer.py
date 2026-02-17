@@ -489,18 +489,30 @@ def test_satb_generation_handles_dense_triple_meter_without_validation_regressio
     assert satb.meta.stage == "satb"
     assert validate_score(satb) == []
 
-def test_musicxml_export_contains_satb_parts_and_harmony():
+def test_musicxml_export_contains_satb_staves_and_harmony_when_verse_stacking_is_enabled():
     req = CompositionRequest(
-        sections=[LyricSection(label="chorus", text="Sing together forever")],
+        sections=[
+            LyricSection(id="v1", label="Verse 1", text="Sing together forever"),
+            LyricSection(id="v2", label="Verse 2", text="Raise your hopeful voices"),
+        ],
+        arrangement=[
+            {"section_id": "v1", "is_verse": True},
+            {"section_id": "v2", "is_verse": True},
+        ],
         preferences=CompositionPreferences(),
     )
     satb = harmonize_score(generate_melody_score(req))
     xml = export_musicxml(satb)
+
     assert "<score-partwise" in xml
-    assert "<part-name>Soprano</part-name>" in xml
-    assert "<part-name>Alto</part-name>" in xml
-    assert "<part-name>Tenor</part-name>" in xml
-    assert "<part-name>Bass</part-name>" in xml
+    assert "<part-name>Choir</part-name>" in xml
+    assert "<staves>2</staves>" in xml
+    assert '<clef number="1"><sign>G</sign><line>2</line></clef>' in xml
+    assert '<clef number="2"><sign>F</sign><line>4</line></clef>' in xml
+    assert "<voice>1</voice>" in xml
+    assert "<voice>2</voice>" in xml
+    assert "<voice>3</voice>" in xml
+    assert "<voice>4</voice>" in xml
     assert "<harmony>" in xml
 
 
@@ -835,7 +847,7 @@ def _assert_measure_complete(score):
             assert sum(note.beats for note in notes) == pytest.approx(target), f"m{measure.number} {voice} not measure-complete"
 
 
-def test_cluster_repeat_arrangement_builds_music_unit_verse_indices():
+def test_arrangement_order_assigns_deterministic_verse_numbering_with_shared_verse_music_unit():
     req = CompositionRequest(
         sections=[
             LyricSection(id="v1", label="Verse 1", text="Morning glory rises forever"),
@@ -843,17 +855,19 @@ def test_cluster_repeat_arrangement_builds_music_unit_verse_indices():
             LyricSection(id="v2", label="Verse 2", text="Mercy carries every broken heart"),
         ],
         arrangement=[
-            {"section_id": "v1", "progression_cluster": "Verse"},
-            {"section_id": "c", "progression_cluster": "Chorus"},
-            {"section_id": "v2", "progression_cluster": "Verse"},
+            {"section_id": "v1", "is_verse": True},
+            {"section_id": "c", "is_verse": False},
+            {"section_id": "v2", "is_verse": True},
         ],
         preferences=CompositionPreferences(time_signature="3/4", key="C", tempo_bpm=92, lyric_rhythm_preset="mixed"),
     )
 
     melody = generate_melody_score(req)
 
-    assert [u.cluster_id for u in melody.meta.arrangement_music_units] == ["Verse", "Chorus", "Verse"]
+    assert [u.music_unit_id for u in melody.meta.arrangement_music_units] == ["verse", "Chorus", "verse"]
     assert [u.verse_index for u in melody.meta.arrangement_music_units] == [1, 1, 2]
+    verse_sections = [section for section in melody.sections if section.is_verse]
+    assert [section.verse_number for section in verse_sections] == [1, 2]
 
 
 def test_cluster_repeat_arrangement_normalizes_measures_and_harmony_coverage():
