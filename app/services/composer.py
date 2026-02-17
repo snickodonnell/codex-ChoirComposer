@@ -215,6 +215,70 @@ def _build_section_progression(scale, section_id: str, start_measure: int, measu
     return progression
 
 
+def _apply_phrase_cadential_bias(
+    chords: list[ScoreChord],
+    sections: list[ScoreSection],
+    section_plans: list[tuple[str, str, str, list[dict]]],
+    beat_cap: float,
+    key: str,
+    primary_mode: str | None,
+) -> list[ScoreChord]:
+    if not chords:
+        return chords
+
+    scale = parse_key(key, primary_mode)
+    section_by_id = {section.id: section for section in sections}
+    chords_by_measure = {ch.measure_number: ch for ch in chords}
+    section_measures: dict[str, set[int]] = {}
+    for chord in chords:
+        section_measures.setdefault(chord.section_id, set()).add(chord.measure_number)
+
+    phrase_end_measures: dict[str, list[int]] = {}
+    cursor = 0.0
+    for section_id, _label, _cluster, rhythm_plan in section_plans:
+        section = section_by_id.get(section_id)
+        if section is None:
+            continue
+        phrase_end_ids = {syllable.id for syllable in section.syllables if syllable.phrase_end_after}
+        for item in rhythm_plan:
+            cursor += sum(item["durations"])
+            if item["syllable_id"] not in phrase_end_ids:
+                continue
+            ending_measure = int(max(cursor - 1e-9, 0.0) // beat_cap) + 1
+            phrase_end_measures.setdefault(section_id, []).append(ending_measure)
+
+    for section_id, endings in phrase_end_measures.items():
+        available_measures = section_measures.get(section_id, set())
+        if not available_measures:
+            continue
+        phrase_ends = sorted(set(endings))
+        section_start = min(available_measures)
+        prev_end = section_start - 1
+        for phrase_end in phrase_ends:
+            if phrase_end not in available_measures:
+                prev_end = phrase_end
+                continue
+
+            span_measures = phrase_end - prev_end
+            cadence_targets: list[tuple[int, int]] = [(phrase_end, 1)]
+            if phrase_end - 1 in available_measures:
+                cadence_targets.append((phrase_end - 1, 5))
+            if span_measures >= 3 and phrase_end - 2 in available_measures:
+                cadence_targets.append((phrase_end - 2, 2))
+
+            for measure_number, degree in cadence_targets:
+                chord = chords_by_measure.get(measure_number)
+                if chord is None:
+                    continue
+                chord.degree = degree
+                chord.symbol = chord_symbol(scale, degree)
+                chord.pitch_classes = triad_pitch_classes(scale, degree)
+
+            prev_end = phrase_end
+
+    return sorted(chords_by_measure.values(), key=lambda chord: chord.measure_number)
+
+
 
 
 
@@ -545,10 +609,23 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
     total_measures = max(1, int(max(beat_cursor - 1e-9, 0.0) // beat_cap) + 1)
     chord_progression = _repair_harmony_progression(chord_progression, total_measures, key, req.preferences.primary_mode)
+    chord_progression = _apply_phrase_cadential_bias(
+        chord_progression,
+        sections,
+        section_plans,
+        beat_cap,
+        key,
+        req.preferences.primary_mode,
+    )
     chord_by_measure = {ch.measure_number: ch for ch in chord_progression}
 
     soprano_notes: list[ScoreNote] = []
     cursor = 0.0
+    phrase_end_ids_by_section = {
+        section.id: {syllable.id for syllable in section.syllables if syllable.phrase_end_after}
+        for section in sections
+    }
+    tonic_stable_tones = set(triad_pitch_classes(scale, 1))
 
     for section_id, label, _progression_cluster, rhythm_plan in section_plans:
         center = 64 if label in {"verse", "bridge"} else 67
@@ -576,6 +653,16 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                     candidate = _nearest_pitch_class_with_leap(candidate, prev, chord_tones, "soprano")
                     candidate = _constrain_melodic_candidate(candidate, prev, "soprano", scale_set)
                     candidate = _nearest_pitch_class_with_leap(candidate, prev, chord_tones, "soprano")
+
+                is_phrase_end_note = (
+                    item["syllable_id"] in phrase_end_ids_by_section.get(item["section_id"], set())
+                    and ni == len(item["durations"]) - 1
+                )
+                if is_phrase_end_note:
+                    stable_tones = tonic_stable_tones if chord and chord.degree == 1 else chord_tones
+                    candidate = _nearest_pitch_class_with_leap(candidate, prev, stable_tones, "soprano")
+                    candidate = _constrain_melodic_candidate(candidate, prev, "soprano", scale_set)
+                    candidate = _nearest_pitch_class_with_leap(candidate, prev, stable_tones, "soprano")
 
                 lyric_text = item["syllable_text"] if mode not in {"melisma_continue", "tie_continue"} else None
 
