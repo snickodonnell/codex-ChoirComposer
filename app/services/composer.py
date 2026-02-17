@@ -375,7 +375,7 @@ def _repair_harmony_progression(chords: list[ScoreChord], measure_count: int, ke
 
     return sorted(repaired, key=lambda c: c.measure_number)
 
-def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, float, str, float, list[PhraseBlock]]]:
+def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, str, float, list[PhraseBlock]]]:
     section_defs = {}
     for idx, section in enumerate(req.sections, start=1):
         section_key = section.id or f"section-{idx}"
@@ -387,7 +387,6 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
                 (section.id or f"section-{idx}"),
                 section.label,
                 section.label,
-                section.pause_beats,
                 "off",
                 0.0,
                 [PhraseBlock(text=line.strip(), must_end_at_barline=True, breath_after_phrase=False, merge_with_next_phrase=False) for line in section.text.splitlines() if line.strip()]
@@ -396,7 +395,7 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
             for idx, section in enumerate(req.sections, start=1)
         ]
 
-    expanded: list[tuple[str, str, str, float, str, float, list[PhraseBlock]]] = []
+    expanded: list[tuple[str, str, str, str, float, list[PhraseBlock]]] = []
     for item in req.arrangement:
         section = section_defs.get(item.section_id)
         if section is None:
@@ -412,7 +411,6 @@ def _expand_arrangement(req: CompositionRequest) -> list[tuple[str, str, str, fl
             item.section_id,
             section.label,
             item.progression_cluster or section.label,
-            item.pause_beats,
             item.anacrusis_mode,
             item.anacrusis_beats,
             phrase_blocks,
@@ -719,7 +717,6 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
         arranged_section_id,
         section_label,
         progression_cluster,
-        arranged_pause_beats,
         anacrusis_mode,
         configured_anacrusis_beats,
         phrase_blocks,
@@ -759,7 +756,6 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
             ScoreSection(
                 id=section_id,
                 label=section_label,
-                pause_beats=arranged_pause_beats,
                 anacrusis_beats=anacrusis_beats,
                 lyrics=section.text,
                 syllables=syllables,

@@ -380,10 +380,10 @@ def test_free_form_section_label_is_preserved_and_generates():
     assert melody.chord_progression
 
 
-def test_pause_after_section_marks_boundary_without_inserting_timed_rests():
+def test_section_boundaries_do_not_insert_timed_rests():
     req = CompositionRequest(
         sections=[
-            LyricSection(label="Verse", text="Light in the morning fills every heart", pause_beats=2),
+            LyricSection(label="Verse", text="Light in the morning fills every heart"),
             LyricSection(label="Chorus", text="Sing together, hope forever"),
         ],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
@@ -393,7 +393,6 @@ def test_pause_after_section_marks_boundary_without_inserting_timed_rests():
     soprano = [n for m in melody.measures for n in m.voices["soprano"]]
     interlude_rests = [n for n in soprano if n.is_rest and n.section_id == "interlude"]
 
-    assert melody.sections[0].pause_beats == 2
     assert not interlude_rests
 
 
@@ -475,23 +474,22 @@ def test_musicxml_export_contains_satb_parts_and_harmony():
 
 
 
-def test_arrangement_order_and_instance_pause_are_metadata_only():
+def test_arrangement_order_preserves_section_instances_without_extra_rests():
     req = CompositionRequest(
         sections=[
             LyricSection(id="v", label="Verse", text="Morning glory rises higher"),
             LyricSection(id="c", label="Chorus", text="Sing together forever"),
         ],
         arrangement=[
-            {"section_id": "c", "pause_beats": 0},
-            {"section_id": "v", "pause_beats": 1.5},
-            {"section_id": "c", "pause_beats": 0},
+            {"section_id": "c"},
+            {"section_id": "v"},
+            {"section_id": "c"},
         ],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
     )
     melody = generate_melody_score(req)
 
     assert [s.label for s in melody.sections] == ["Chorus", "Verse", "Chorus"]
-    assert [s.pause_beats for s in melody.sections] == [0, 1.5, 0]
 
     interlude_rests = [
         n
@@ -509,9 +507,9 @@ def test_progression_cluster_reuses_single_progression_across_labels_and_repeats
             LyricSection(id="v2", label="Verse B", text="Mercy flows and carries every voice"),
         ],
         arrangement=[
-            {"section_id": "v1", "pause_beats": 0, "progression_cluster": "Verse"},
-            {"section_id": "v2", "pause_beats": 0, "progression_cluster": "Verse"},
-            {"section_id": "v1", "pause_beats": 0, "progression_cluster": "Verse"},
+            {"section_id": "v1", "progression_cluster": "Verse"},
+            {"section_id": "v2", "progression_cluster": "Verse"},
+            {"section_id": "v1", "progression_cluster": "Verse"},
         ],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
     )
@@ -531,7 +529,7 @@ def test_progression_cluster_reuses_single_progression_across_labels_and_repeats
 def test_phrase_endings_bias_progression_toward_cadence_without_rewriting_entire_cluster():
     req = CompositionRequest(
         sections=[LyricSection(id="v", label="Verse", text="Morning light rises\nHope is here")],
-        arrangement=[{"section_id": "v", "pause_beats": 0, "progression_cluster": "Verse"}],
+        arrangement=[{"section_id": "v", "progression_cluster": "Verse"}],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
     )
 
@@ -562,7 +560,7 @@ def test_phrase_endings_bias_progression_toward_cadence_without_rewriting_entire
 def test_phrase_end_soprano_note_lands_on_stable_chord_tone():
     req = CompositionRequest(
         sections=[LyricSection(id="v", label="Verse", text="Bless-ed hope\nA-men")],
-        arrangement=[{"section_id": "v", "pause_beats": 0, "progression_cluster": "Verse"}],
+        arrangement=[{"section_id": "v", "progression_cluster": "Verse"}],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=88, lyric_rhythm_preset="mixed"),
     )
 
@@ -597,8 +595,8 @@ def test_regenerate_updates_only_selected_clusters():
             LyricSection(id="c", label="Chorus", text="Sing together forever"),
         ],
         arrangement=[
-            {"section_id": "v", "pause_beats": 0, "progression_cluster": "Verse"},
-            {"section_id": "c", "pause_beats": 0, "progression_cluster": "Chorus"},
+            {"section_id": "v", "progression_cluster": "Verse"},
+            {"section_id": "c", "progression_cluster": "Chorus"},
         ],
         preferences=CompositionPreferences(time_signature="4/4", key="C", tempo_bpm=90, lyric_rhythm_preset="mixed"),
     )
@@ -715,8 +713,7 @@ def test_validate_score_flags_phrase_end_not_on_barline():
                 {
                     "id": "sec-1",
                     "label": "verse",
-                    "pause_beats": 0,
-                    "lyrics": "amen",
+                                        "lyrics": "amen",
                     "syllables": [
                         {
                             "id": "sec-1-syl-0",
@@ -814,9 +811,9 @@ def test_cluster_repeat_arrangement_normalizes_measures_and_harmony_coverage():
             LyricSection(id="v2", label="Verse 2", text="Mercy carries every broken heart"),
         ],
         arrangement=[
-            {"section_id": "v1", "pause_beats": 0, "progression_cluster": "Verse"},
-            {"section_id": "v2", "pause_beats": 0, "progression_cluster": "Verse"},
-            {"section_id": "v1", "pause_beats": 0, "progression_cluster": "Verse"},
+            {"section_id": "v1", "progression_cluster": "Verse"},
+            {"section_id": "v2", "progression_cluster": "Verse"},
+            {"section_id": "v1", "progression_cluster": "Verse"},
         ],
         preferences=CompositionPreferences(time_signature="3/4", key="C", tempo_bpm=92, lyric_rhythm_preset="mixed"),
     )
