@@ -130,15 +130,13 @@ def test_compose_end_score_endpoint_runs_full_workflow():
     assert "input" in payload["composition_notes"]
 
 
-def test_refine_endpoint_accepts_cluster_regenerate_payload():
+def test_regenerate_endpoint_accepts_cluster_regenerate_payload():
     melody = generate_melody_score(_sample_request())
 
     res = client.post(
-        "/api/refine-melody",
+        "/api/regenerate-melody",
         json={
             "score": melody.model_dump(),
-            "instruction": "fresh melodic idea",
-            "regenerate": True,
             "selected_units": ["verse"],
             "section_clusters": {"sec-1": "verse"},
         },
@@ -148,16 +146,14 @@ def test_refine_endpoint_accepts_cluster_regenerate_payload():
     assert res.json()["score"]["meta"]["stage"] == "melody"
 
 
-def test_refine_satb_endpoint_accepts_cluster_regenerate_payload():
+def test_regenerate_satb_endpoint_accepts_cluster_regenerate_payload():
     melody = generate_melody_score(_sample_request())
     satb = harmonize_score(melody)
 
     res = client.post(
-        "/api/refine-satb",
+        "/api/regenerate-satb",
         json={
             "score": satb.model_dump(),
-            "instruction": "fresh harmonic voicing",
-            "regenerate": True,
             "selected_units": ["verse"],
             "section_clusters": {"sec-1": "verse"},
         },
@@ -167,22 +163,35 @@ def test_refine_satb_endpoint_accepts_cluster_regenerate_payload():
     assert res.json()["score"]["meta"]["stage"] == "satb"
 
 
-def test_refine_satb_rejects_melody_input_stage():
+
+
+def test_refine_endpoints_removed():
+    melody = generate_melody_score(_sample_request())
+    satb = harmonize_score(melody)
+
+    melody_res = client.post("/api/refine-melody", json={"score": melody.model_dump(), "instruction": "legacy"})
+    satb_res = client.post("/api/refine-satb", json={"score": satb.model_dump(), "instruction": "legacy"})
+
+    assert melody_res.status_code == 404
+    assert satb_res.status_code == 404
+
+
+def test_regenerate_satb_rejects_melody_input_stage():
     melody = generate_melody_score(_sample_request())
 
     res = client.post(
-        "/api/refine-satb",
-        json={"score": melody.model_dump(), "instruction": "smooth inner voices", "regenerate": False},
+        "/api/regenerate-satb",
+        json={"score": melody.model_dump()},
     )
 
     assert res.status_code == 422
-    assert "SATB refinement failed" in res.json()["detail"]["message"]
+    assert "SATB regeneration failed" in res.json()["detail"]["message"]
     assert res.json()["detail"]["request_id"]
 
 
 
 
-def test_refine_melody_regenerate_manual_pickups_preserves_full_harmony_coverage():
+def test_regenerate_melody_manual_pickups_preserves_full_harmony_coverage():
     payload = {
         "sections": [
             {
@@ -218,26 +227,24 @@ def test_refine_melody_regenerate_manual_pickups_preserves_full_harmony_coverage
     melody = generate_res.json()["score"]
     original_degrees = [ch["degree"] for ch in melody["chord_progression"]]
 
-    refine_res = client.post(
-        "/api/refine-melody",
+    regenerate_res = client.post(
+        "/api/regenerate-melody",
         json={
             "score": melody,
-            "instruction": "fresh melodic idea",
-            "regenerate": True,
             "selected_units": ["verse"],
             "section_clusters": {"sec-1": "verse", "sec-2": "verse", "sec-3": "verse"},
         },
     )
 
-    assert refine_res.status_code == 200
-    refined_score = refine_res.json()["score"]
-    refined_degrees = [ch["degree"] for ch in refined_score["chord_progression"]]
-    measure_numbers = {measure["number"] for measure in refined_score["measures"]}
-    chord_measures = {chord["measure_number"] for chord in refined_score["chord_progression"]}
+    assert regenerate_res.status_code == 200
+    regenerated_score = regenerate_res.json()["score"]
+    regenerated_degrees = [ch["degree"] for ch in regenerated_score["chord_progression"]]
+    measure_numbers = {measure["number"] for measure in regenerated_score["measures"]}
+    chord_measures = {chord["measure_number"] for chord in regenerated_score["chord_progression"]}
 
-    assert refined_degrees != original_degrees
+    assert regenerated_degrees != original_degrees
     assert measure_numbers == chord_measures
-    assert len(refined_score["chord_progression"]) == len(refined_score["measures"]) == 48
+    assert len(regenerated_score["chord_progression"]) == len(regenerated_score["measures"]) == 48
 
 def test_request_id_header_present_on_response():
     req = _sample_request()

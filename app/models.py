@@ -224,10 +224,8 @@ class MelodyResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class RefineRequest(BaseModel):
+class RegenerateRequest(BaseModel):
     score: CanonicalScore
-    instruction: str = Field(min_length=3, max_length=300)
-    regenerate: bool = False
     selected_units: list[str] = Field(default_factory=list)
     selected_clusters: list[str] = Field(default_factory=list)
     section_clusters: dict[str, str] = Field(default_factory=dict)

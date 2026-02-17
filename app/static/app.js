@@ -14,13 +14,11 @@ const satbDraftVersionSelectEl = document.getElementById('satbDraftVersionSelect
 const satbRegenerateClustersEl = document.getElementById('satbRegenerateClusters');
 
 const generateMelodyBtn = document.getElementById('generateMelody');
-const refineBtn = document.getElementById('refine');
 const regenerateBtn = document.getElementById('regenerate');
 const startMelodyBtn = document.getElementById('startMelody');
 const pauseMelodyBtn = document.getElementById('pauseMelody');
 const stopMelodyBtn = document.getElementById('stopMelody');
 const generateSATBBtn = document.getElementById('generateSATB');
-const refineSatbBtn = document.getElementById('refineSATB');
 const regenerateSatbBtn = document.getElementById('regenerateSATB');
 const startSATBBtn = document.getElementById('startSATB');
 const pauseSATBBtn = document.getElementById('pauseSATB');
@@ -704,77 +702,47 @@ function stopPlayback(type) {
   playbackEngine.stop(type);
 }
 
-async function refineActiveMelody({ regenerate }) {
+async function regenerateActiveMelody() {
   if (!melodyScore) {
-    showErrors([`Generate a melody before ${regenerate ? 'regenerating' : 'refining'}.`]);
+    showErrors(['Generate a melody before regenerating.']);
     return;
   }
-  const instruction = document.getElementById('instruction').value || (regenerate ? 'fresh melodic idea' : 'smooth out leaps');
-  const melodyVersionId = activeMelodyVersionId();
   const currentVersion = activeDraftVersion();
   const payload = {
     score: melodyScore,
-    instruction,
-    regenerate,
+    selected_units: [...regenerateClustersEl.selectedOptions].map((o) => o.value),
+    section_clusters: currentVersion?.sectionClusterMap || {},
   };
 
-  if (regenerate) {
-    payload.selected_units = [...regenerateClustersEl.selectedOptions].map((o) => o.value);
-    payload.section_clusters = currentVersion?.sectionClusterMap || {};
-  }
-
-  const res = await post('/api/refine-melody', payload);
+  const res = await post('/api/regenerate-melody', payload);
   const melodyPayload = await res.json();
   const score = melodyPayload.score;
   showComposerWarnings(melodyPayload.warnings || []);
-  if (regenerate) {
-    appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
-  } else {
-    upsertActiveVersion(score, 'Melody (refined)');
-    if (melodyVersionId) {
-      satbDraftVersionsByMelodyVersion.delete(melodyVersionId);
-    }
-  }
+  appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
   resetSatbStage();
   updateActionAvailability();
 }
 
-async function refineActiveSatb({ regenerate }) {
+async function regenerateActiveSatb() {
   if (!satbScore) {
-    showErrors([`Generate SATB before ${regenerate ? 'regenerating' : 'refining'}.`]);
+    showErrors(['Generate SATB before regenerating.']);
     return;
   }
-  const instructionEl = document.getElementById('satbInstruction');
-  const instruction = instructionEl?.value || (regenerate ? 'fresh melodic idea' : 'smooth out leaps');
   const currentVersion = activeDraftVersion();
   const payload = {
     score: satbScore,
-    instruction,
-    regenerate,
+    selected_units: [...satbRegenerateClustersEl.selectedOptions].map((o) => o.value),
+    section_clusters: currentVersion?.sectionClusterMap || {},
   };
-  if (regenerate) {
-    payload.selected_units = [...satbRegenerateClustersEl.selectedOptions].map((o) => o.value);
-    payload.section_clusters = currentVersion?.sectionClusterMap || {};
-  }
 
-  const res = await post('/api/refine-satb', payload);
+  const res = await post('/api/regenerate-satb', payload);
   const responsePayload = await res.json();
   appendSatbDraftVersion(
     responsePayload.score,
     responsePayload.harmonization_notes,
-    regenerate ? 'SATB (regenerated)' : 'SATB (refined)',
+    'SATB (regenerated)',
   );
   updateActionAvailability();
-}
-
-function upsertActiveVersion(score, label) {
-  const current = activeDraftVersion();
-  if (!current) return;
-  stopPlayback('melody');
-  current.score = score;
-  current.label = label;
-  safeRenderMelody(score, label);
-  updateDraftVersionOptions();
 }
 
 function appendDraftVersion(score, sectionClusterMap, label) {
@@ -985,7 +953,6 @@ function loadHymnTestData() {
   document.getElementById('mood').value = 'Prayerful';
   document.getElementById('lyricPreset').value = 'syllabic';
   document.getElementById('barsPerVerse').value = '16';
-  document.getElementById('instruction').value = 'Keep a reverent, singable contour.';
 
   melodyScore = null;
   satbScore = null;
@@ -1489,13 +1456,11 @@ function updateActionAvailability() {
   const hasSatb = Boolean(satbScore);
 
   setButtonEnabled(generateMelodyBtn, true);
-  setButtonEnabled(refineBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(regenerateBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(startMelodyBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(pauseMelodyBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(stopMelodyBtn, hasMelody, 'Generate a melody first.');
   setButtonEnabled(generateSATBBtn, hasMelody, 'Generate a melody first.');
-  setButtonEnabled(refineSatbBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(regenerateSatbBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(startSATBBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(pauseSATBBtn, hasSatb, 'Generate SATB first.');
@@ -1593,9 +1558,7 @@ generateMelodyBtn.onclick = async () => {
   updateActionAvailability();
 };
 
-refineBtn.onclick = async () => refineActiveMelody({ regenerate: false });
-
-regenerateBtn.onclick = async () => refineActiveMelody({ regenerate: true });
+regenerateBtn.onclick = async () => regenerateActiveMelody();
 
 draftVersionSelectEl.onchange = () => {
   const selectedId = draftVersionSelectEl.value;
@@ -1662,8 +1625,7 @@ generateSATBBtn.onclick = async () => {
   updateActionAvailability();
 };
 
-refineSatbBtn.onclick = async () => refineActiveSatb({ regenerate: false });
-regenerateSatbBtn.onclick = async () => refineActiveSatb({ regenerate: true });
+regenerateSatbBtn.onclick = async () => regenerateActiveSatb();
 
 satbDraftVersionSelectEl.onchange = () => {
   const selectedId = satbDraftVersionSelectEl.value;

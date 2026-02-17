@@ -1914,24 +1914,21 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     )
 
 
-def refine_score(
+def regenerate_score(
     score: CanonicalScore,
-    instruction: str,
-    regenerate: bool,
     selected_units: list[str] | None = None,
     selected_clusters: list[str] | None = None,
     section_clusters: dict[str, str] | None = None,
 ) -> CanonicalScore:
     score = normalize_score_for_rendering(score)
-    rng = random.Random() if regenerate else random.Random(instruction)
+    rng = random.Random()
     scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
-    if regenerate:
-        requested_units = selected_units if selected_units is not None else selected_clusters or []
-        score.chord_progression = _regenerate_progression_for_units(
-            score,
-            requested_units,
-            rng,
-        )
+    requested_units = selected_units if selected_units is not None else selected_clusters or []
+    score.chord_progression = _regenerate_progression_for_units(
+        score,
+        requested_units,
+        rng,
+    )
     progression = {c.measure_number: c for c in score.chord_progression}
     bpb = beats_per_measure(score.meta.time_signature)
     prev = None
@@ -1943,12 +1940,7 @@ def refine_score(
             continue
         midi = pitch_to_midi(note.pitch)
         basis = midi if prev is None else prev
-        if regenerate:
-            midi += rng.choice([-3, -2, -1, 1, 2, 3])
-        elif "higher" in instruction.lower() and note.lyric_mode in {"single", "melisma_start"}:
-            midi += 2
-        elif "lower" in instruction.lower() and note.lyric_mode in {"single", "melisma_start"}:
-            midi -= 2
+        midi += rng.choice([-3, -2, -1, 1, 2, 3])
         midi = _constrain_melodic_candidate(midi, basis, "soprano", scale_set)
         if note.lyric_mode == "tie_continue":
             midi = basis
@@ -1963,12 +1955,12 @@ def refine_score(
         cursor += note.beats
 
     score = ensure_chord_symbols_complete(score)
-    score.meta.rationale = f"Refined while preserving progression authority: {instruction}"
+    score.meta.rationale = "Regenerated while preserving progression authority."
     diagnostics = validate_score_diagnostics(score)
     if diagnostics.fatal:
-        log_event(logger, "validation_failed", level=logging.ERROR, stage="refine_score", diagnostics=diagnostics.fatal)
-        raise ValueError("Refined score failed validation.")
-    log_event(logger, "validation_passed", stage="refine_score", warnings=diagnostics.warnings)
+        log_event(logger, "validation_failed", level=logging.ERROR, stage="regenerate_score", diagnostics=diagnostics.fatal)
+        raise ValueError("Regenerated score failed validation.")
+    log_event(logger, "validation_passed", stage="regenerate_score", warnings=diagnostics.warnings)
     return normalize_score_for_rendering(score)
 
 

@@ -275,7 +275,7 @@ def test_satb_playback_remains_available_after_multiple_generations():
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
 
 
-def test_satb_refine_and_regenerate_create_new_playable_versions():
+def test_satb_regenerate_creates_new_playable_versions():
     playwright = pytest.importorskip("playwright.sync_api")
 
     with run_app_server() as base_url:
@@ -307,8 +307,7 @@ def test_satb_refine_and_regenerate_create_new_playable_versions():
                     timeout=20000,
                 )
 
-                page.fill("#satbInstruction", "smooth inner voices")
-                page.click("#refineSATB")
+                page.click("#regenerateSATB")
                 page.wait_for_timeout(300)
                 page.click("#regenerateSATB")
                 page.wait_for_timeout(300)
@@ -399,7 +398,7 @@ def test_melody_playback_still_works_after_satb_regenerate_and_stop_start_cycle(
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
 
 
-def test_satb_stop_refine_start_cycle_emits_new_playback_start_event():
+def test_satb_stop_regenerate_start_cycle_emits_new_playback_start_event():
     playwright = pytest.importorskip("playwright.sync_api")
 
     with run_app_server() as base_url:
@@ -441,8 +440,7 @@ def test_satb_stop_refine_start_cycle_emits_new_playback_start_event():
                 )
                 page.click("#stopSATB")
 
-                page.fill("#satbInstruction", "add more contrary motion")
-                page.click("#refineSATB")
+                page.click("#regenerateSATB")
                 page.wait_for_timeout(500)
 
                 previous_start_count = page.evaluate(
@@ -470,6 +468,28 @@ def test_satb_stop_refine_start_cycle_emits_new_playback_start_event():
                     }
                     """
                 )
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+
+
+def test_refine_controls_are_removed_from_mvp_ui():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                assert page.locator("#refine").count() == 0
+                assert page.locator("#instruction").count() == 0
+                assert page.locator("#refineSATB").count() == 0
+                assert page.locator("#satbInstruction").count() == 0
+
                 browser.close()
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")

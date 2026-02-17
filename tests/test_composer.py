@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from app.services import composer as composer_service
 from app.models import ArrangementItem, CanonicalScore, CompositionPreferences, CompositionRequest, LyricSection, PhraseBlock
-from app.services.composer import generate_melody_score, harmonize_score, refine_score
+from app.services.composer import generate_melody_score, harmonize_score, regenerate_score
 from app.services.lyric_mapping import config_for_preset, plan_syllable_rhythm, tokenize_section_lyrics
 from app.services.music_theory import VOICE_RANGES, pitch_to_midi
 from app.services.musicxml_export import export_musicxml
@@ -668,16 +668,14 @@ def test_regenerate_updates_only_selected_clusters():
     for chord in melody.chord_progression:
         before_by_section.setdefault(chord.section_id, []).append((chord.measure_number, chord.degree))
 
-    refined = refine_score(
+    regenerated = regenerate_score(
         melody,
-        "fresh melodic idea",
-        True,
         selected_clusters=["Chorus"],
         section_clusters={"sec-1": "Verse", "sec-2": "Chorus"},
     )
 
     after_by_section: dict[str, list[tuple[int, int]]] = {}
-    for chord in refined.chord_progression:
+    for chord in regenerated.chord_progression:
         after_by_section.setdefault(chord.section_id, []).append((chord.measure_number, chord.degree))
 
     changed_chorus = before_by_section.get("sec-2") != after_by_section.get("sec-2")
