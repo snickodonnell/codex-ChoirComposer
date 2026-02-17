@@ -405,7 +405,7 @@ function renderMelody(score, heading = 'Melody') {
   document.getElementById('melodySheet').innerHTML = '';
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
-  drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano', { includeRests: true }), melodyScore.meta.time_signature, buildSectionBoundaryMap(melodyScore));
+  drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano', { includeRests: true }), melodyScore.meta.time_signature);
   refreshPreview('melody');
 }
 
@@ -518,8 +518,7 @@ function renderSatb(score, harmonizationNotes = null, heading = 'SATB') {
   document.getElementById('satbChords').textContent = formatChordLine(satbScore);
   document.getElementById('satbSheet').innerHTML = '';
 
-  const boundaryMap = buildSectionBoundaryMap(satbScore);
-  ['soprano', 'alto', 'tenor', 'bass'].forEach((v) => drawStaff('satbSheet', heading === 'SATB' ? v.toUpperCase() : `${heading} · ${v.toUpperCase()}`, flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature, boundaryMap));
+  ['soprano', 'alto', 'tenor', 'bass'].forEach((v) => drawStaff('satbSheet', heading === 'SATB' ? v.toUpperCase() : `${heading} · ${v.toUpperCase()}`, flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature));
   refreshPreview('satb');
 }
 
@@ -780,9 +779,8 @@ function getArrangementItemPhraseBlocks(item) {
     .filter((block) => block.text.trim().length > 0);
 }
 
-function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = null, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0) {
+function addArrangementItem(sectionId, progressionCluster = null, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0) {
   if (!sectionId) return;
-  const normalizedPause = pauseBeats ?? 0;
   const section = getSectionLibrary().find((entry) => entry.id === sectionId);
   const clusterValue = progressionCluster || section?.label || 'default';
   const resolvedPhraseBlocks = phraseBlocks || derivePhraseBlocksFromText(section?.text || '');
@@ -794,9 +792,6 @@ function addArrangementItem(sectionId, pauseBeats = null, progressionCluster = n
       <div class="arrangement-item-meta"></div>
       <label>Progression Cluster
         <input class="arrangement-progression-cluster" value="${clusterValue}" placeholder="e.g. Verse, Chorus, Bridge" />
-      </label>
-      <label>Pause after section (beats)
-        <input class="arrangement-pause-beats" type="number" min="0" max="4" step="0.5" value="${normalizedPause}" />
       </label>
       <label>Anacrusis handling
         <select class="arrangement-anacrusis-mode">
@@ -855,9 +850,9 @@ function loadHymnTestData() {
   sections.forEach((section) => addSectionRow(section.label, section.text));
 
   const rows = getSectionRows();
-  addArrangementItem(rows[0]?.dataset.sectionId, 0, 'Verse A');
-  addArrangementItem(rows[1]?.dataset.sectionId, 0, 'Verse B');
-  addArrangementItem(rows[2]?.dataset.sectionId, 0, 'Refrain');
+  addArrangementItem(rows[0]?.dataset.sectionId, 'Verse A');
+  addArrangementItem(rows[1]?.dataset.sectionId, 'Verse B');
+  addArrangementItem(rows[2]?.dataset.sectionId, 'Refrain');
 
   document.getElementById('key').value = 'G';
   document.getElementById('primaryMode').value = 'major';
@@ -1004,7 +999,6 @@ function collectPayload() {
   const arrangementCard = arrangementListEl.closest('.card');
   const arrangement = [...arrangementListEl.querySelectorAll('.arrangement-item')].map((item) => ({
     section_id: item.dataset.sectionId,
-    pause_beats: Number(item.querySelector('.arrangement-pause-beats')?.value) || 0,
     progression_cluster: item.querySelector('.arrangement-progression-cluster')?.value.trim() || null,
     anacrusis_mode: item.querySelector('.arrangement-anacrusis-mode')?.value || 'off',
     anacrusis_beats: Number(item.querySelector('.arrangement-anacrusis-beats')?.value) || 0,
@@ -1143,10 +1137,6 @@ function formatChordLine(score) {
   return `Chord progression: ${score.chord_progression.map(c => `m${c.measure_number}:${c.symbol}`).join(' | ')}`;
 }
 
-function buildSectionBoundaryMap(score) {
-  return new Map((score?.sections || []).map((section) => [section.id, Number(section.pause_beats) > 0]));
-}
-
 function noteToVexKey(p) {
   const m = p.match(/^([A-G]#?b?)(\d)$/);
   if (!m) return 'c/4';
@@ -1229,7 +1219,7 @@ function buildVexNotes(notes, timeSignature) {
   return staveNotes;
 }
 
-function drawStaff(containerId, title, notes, timeSignature, boundaryMap = new Map()) {
+function drawStaff(containerId, title, notes, timeSignature) {
   const root = document.getElementById(containerId);
   const wrap = document.createElement('div');
   wrap.className = 'staff-wrap';
@@ -1274,7 +1264,7 @@ function drawStaff(containerId, title, notes, timeSignature, boundaryMap = new M
     if (idx > 0) {
       const previousSection = displayNotes[idx - 1]?.section_id;
       const currentSection = note.section_id;
-      if (previousSection && currentSection && previousSection !== currentSection && boundaryMap.get(previousSection)) {
+      if (previousSection && currentSection && previousSection !== currentSection) {
         lyricTokens.push('‖');
       }
     }
@@ -1445,6 +1435,26 @@ draftVersionSelectEl.onchange = () => {
   syncSatbStageForActiveMelody();
 };
 
+function buildTimedPlaybackEvents(events, pauseSeconds) {
+  let cursor = 0;
+  let previousSectionId = null;
+  const timedEvents = events.map((event) => {
+    if (previousSectionId && event.sectionId && event.sectionId !== previousSectionId) {
+      cursor += pauseSeconds;
+    }
+    const current = { pitches: event.pitches, seconds: event.seconds, time: cursor };
+    cursor += event.seconds;
+    previousSectionId = event.sectionId || previousSectionId;
+    return current;
+  });
+  return { timedEvents, totalSeconds: cursor };
+}
+
+function arrangementPauseSeconds(score) {
+  const { beatsPerMeasure } = parseTimeSignature(score?.meta?.time_signature);
+  return (60 / score.meta.tempo_bpm) * beatsPerMeasure;
+}
+
 startMelodyBtn.onclick = async () => {
   if (!melodyScore) {
     showErrors(['Generate a melody before playback.']);
@@ -1453,19 +1463,15 @@ startMelodyBtn.onclick = async () => {
   const events = flattenVoice(melodyScore, 'soprano').map((n) => ({
     pitches: [n.pitch],
     seconds: (60 / melodyScore.meta.tempo_bpm) * n.beats,
+    sectionId: n.section_id,
   }));
-  let cursor = 0;
-  const timedEvents = events.map((event) => {
-    const current = { ...event, time: cursor };
-    cursor += event.seconds;
-    return current;
-  });
+  const { timedEvents, totalSeconds } = buildTimedPlaybackEvents(events, arrangementPauseSeconds(melodyScore));
   await startPlayback({
-    id: `melody:${activeDraftVersionId || 'current'}:${fingerprintNotes(events)}:${melodyScore.meta.tempo_bpm}`,
+    id: `melody:${activeDraftVersionId || 'current'}:${fingerprintNotes(events)}:${melodyScore.meta.tempo_bpm}:gap1bar`,
     type: 'melody',
     poly: false,
     events: timedEvents,
-    totalSeconds: cursor,
+    totalSeconds,
   });
 };
 
@@ -1508,19 +1514,15 @@ startSATBBtn.onclick = async () => {
   const chordEvents = soprano.map((sn, i) => ({
     pitches: [sn.pitch, alto[i]?.pitch, tenor[i]?.pitch, bass[i]?.pitch].filter(Boolean),
     seconds: (60 / satbScore.meta.tempo_bpm) * sn.beats,
+    sectionId: sn.section_id,
   }));
-  let cursor = 0;
-  const timedEvents = chordEvents.map((event) => {
-    const current = { ...event, time: cursor };
-    cursor += event.seconds;
-    return current;
-  });
+  const { timedEvents, totalSeconds } = buildTimedPlaybackEvents(chordEvents, arrangementPauseSeconds(satbScore));
   await startPlayback({
-    id: `satb:${activeSatbDraftVersionId || 'current'}:${fingerprintNotes(chordEvents)}:${satbScore.meta.tempo_bpm}`,
+    id: `satb:${activeSatbDraftVersionId || 'current'}:${fingerprintNotes(chordEvents)}:${satbScore.meta.tempo_bpm}:gap1bar`,
     type: 'satb',
     poly: true,
     events: timedEvents,
-    totalSeconds: cursor,
+    totalSeconds,
   });
 };
 

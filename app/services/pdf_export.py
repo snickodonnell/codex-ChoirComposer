@@ -36,7 +36,6 @@ def build_score_pdf(score: CanonicalScore) -> bytes:
 
     chords = {c.measure_number: c.symbol for c in score.chord_progression}
 
-    section_pause_map = {section.id: section.pause_beats for section in score.sections}
     previous_measure_section: str | None = None
 
     for measure in score.measures:
@@ -46,7 +45,7 @@ def build_score_pdf(score: CanonicalScore) -> bytes:
             c.setFont("Courier", 8)
         first_section_note = next((n for n in measure.voices['soprano'] if n.section_id != 'padding'), None)
         current_measure_section = first_section_note.section_id if first_section_note else previous_measure_section
-        if previous_measure_section and current_measure_section and previous_measure_section != current_measure_section and section_pause_map.get(previous_measure_section, 0) > 0:
+        if previous_measure_section and current_measure_section and previous_measure_section != current_measure_section:
             c.setFont("Helvetica-Bold", 9)
             c.drawString(0.75 * inch, y, "‖ Section boundary")
             y -= 0.14 * inch
