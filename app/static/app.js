@@ -349,6 +349,9 @@ function getRequestIdFromHeaders(headers) {
 function formatApiErrorMessage(error) {
   const data = error?.response?.data;
   let message = null;
+  const detailObject = data && typeof data?.detail === 'object' && data.detail !== null && !Array.isArray(data.detail)
+    ? data.detail
+    : null;
 
   const toDisplayString = (value, fallback = 'Unexpected error.') => {
     if (typeof value === 'string') {
@@ -358,15 +361,8 @@ function formatApiErrorMessage(error) {
     if (value instanceof Error && typeof value.message === 'string' && value.message.trim()) {
       return value.message.trim();
     }
-    if (value !== null && value !== undefined) {
-      try {
-        const serialized = JSON.stringify(value);
-        if (typeof serialized === 'string' && serialized.trim()) {
-          return serialized;
-        }
-      } catch (_) {
-        // no-op, fallback below
-      }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
     }
     return fallback;
   };
@@ -374,6 +370,8 @@ function formatApiErrorMessage(error) {
   if (data && typeof data === 'object') {
     if (typeof data.message === 'string' && data.message.trim()) {
       message = data.message;
+    } else if (detailObject && typeof detailObject.message === 'string' && detailObject.message.trim()) {
+      message = detailObject.message;
     } else if (typeof data.detail === 'string' && data.detail.trim()) {
       message = data.detail;
     } else if (typeof data.error === 'string' && data.error.trim()) {
@@ -397,7 +395,10 @@ function formatApiErrorMessage(error) {
     message = toDisplayString(error?.message || error);
   }
 
-  const requestId = error?.request_id || getRequestIdFromHeaders(error?.response?.headers) || (data && typeof data === 'object' ? data.request_id : null);
+  const requestId = error?.request_id
+    || getRequestIdFromHeaders(error?.response?.headers)
+    || (detailObject && typeof detailObject.request_id === 'string' && detailObject.request_id.trim() ? detailObject.request_id : null)
+    || (data && typeof data === 'object' ? data.request_id : null);
   return requestId ? `${toDisplayString(message)} (request_id: ${requestId})` : toDisplayString(message);
 }
 
@@ -411,6 +412,7 @@ function runFormatApiErrorMessageRuntimeCheck() {
   const cases = [
     { name: 'fastapi-422-array', error: { response: { data: { detail: [{ loc: ['body', 'sections', 0], msg: 'field required' }] } } } },
     { name: 'message-with-request-id', error: { response: { data: { message: 'Invalid mode', request_id: 'abc-123' } } } },
+    { name: 'fastapi-detail-object', error: { response: { data: { detail: { message: 'Melody generation failed. Please adjust inputs and try again.', request_id: 'req-xyz', debug: { internal: true } } } } } },
     { name: 'plain-error', error: new Error('Network unavailable') },
     { name: 'arbitrary-object', error: { foo: 'bar', nested: { ok: true } } },
   ];
