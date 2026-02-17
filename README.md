@@ -87,18 +87,3 @@ pytest -q tests/test_frontend_workflow_regression.py
 When adding new Python modules, avoid naming files after common third-party packages (for example: `pydantic.py`, `fastapi.py`, or `requests.py`).
 These names can shadow installed dependencies on Python import paths and cause confusing runtime import failures.
 
-## Playwright screenshots in containers / Codespaces
-For reliable screenshots in containerized environments (where Chromium can crash due to sandbox or `/dev/shm` constraints), use the fallback screenshot helper:
-
-```bash
-python scripts/capture_screenshot.py \
-  --url http://127.0.0.1:8000/ \
-  --output artifacts/ui-home.png
-```
-
-The helper:
-- launches Chromium with container-safe flags (`--no-sandbox`, `--disable-dev-shm-usage`, etc.),
-- falls back to Firefox/WebKit if Chromium fails,
-- writes a JSON capture log at `artifacts/screenshot-capture-log.json`.
-
-In CI, `.github/workflows/screenshot-smoke.yml` installs Playwright OS dependencies and all browser engines, captures a screenshot, and always uploads artifacts (including logs) even when capture fails.
