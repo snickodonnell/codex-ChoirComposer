@@ -29,7 +29,7 @@ from app.models import (
     RefineRequest,
     SATBResponse,
 )
-from app.services.composer import generate_melody_score, harmonize_score, refine_score
+from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, refine_score
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import EngravingOptions, preview_service
 from app.services.pdf_export import build_score_pdf
@@ -148,6 +148,17 @@ def generate_melody_endpoint(payload: CompositionRequest):
     try:
         score = normalize_score_for_rendering(generate_melody_score(payload))
         return MelodyResponse(score=score)
+    except MelodyGenerationFailedError as exc:
+        log_event(
+            logger,
+            "melody_generation_final_failure",
+            level=logging.ERROR,
+            request_id=current_request_id(),
+            attempt_count=exc.attempt_count,
+            final_exception_type=exc.final_exception_type,
+            final_diagnostics=exc.final_diagnostics[:10],
+        )
+        raise _handle_user_error("Melody generation", exc) from exc
     except ValueError as exc:
         raise _handle_user_error("Melody generation", exc) from exc
 

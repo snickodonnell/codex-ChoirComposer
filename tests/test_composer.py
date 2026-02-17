@@ -833,11 +833,14 @@ def test_generate_melody_failure_uses_friendly_message(monkeypatch):
     monkeypatch.setattr(composer_service, "MAX_GENERATION_ATTEMPTS", 2)
     monkeypatch.setattr(composer_service, "validate_score", lambda *_args, **_kwargs: ["raw internal validation detail"])
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(composer_service.MelodyGenerationFailedError) as exc:
         composer_service.generate_melody_score(req)
 
     assert "Couldn’t generate a valid melody" in str(exc.value)
     assert "raw internal validation detail" not in str(exc.value)
+    assert exc.value.attempt_count == 2
+    assert exc.value.final_exception_type == "ScoreValidationError"
+    assert exc.value.final_diagnostics == ["raw internal validation detail"]
 
 
 def _assert_measure_complete(score):
