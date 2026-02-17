@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.main import app
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
-from app.services.composer import generate_melody_score, harmonize_score
+from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score
 
 
 client = TestClient(app)
@@ -133,6 +133,32 @@ def test_request_id_header_present_on_response():
     assert res.status_code == 200
     assert res.headers.get("X-Request-ID")
 
+
+
+
+def test_generate_melody_logs_final_failure_event(caplog, monkeypatch):
+    diagnostics = [f"diagnostic-{idx}" for idx in range(12)]
+
+    def _raise_failure(_payload):
+        raise MelodyGenerationFailedError(
+            "friendly failure",
+            attempt_count=5,
+            final_exception_type="ScoreValidationError",
+            final_diagnostics=diagnostics,
+        )
+
+    monkeypatch.setattr(main_module, "generate_melody_score", _raise_failure)
+
+    with caplog.at_level(logging.ERROR):
+        res = client.post("/api/generate-melody", json=_sample_request().model_dump())
+
+    assert res.status_code == 422
+    final_failure_events = [record for record in caplog.records if getattr(record, "event", "") == "melody_generation_final_failure"]
+    assert len(final_failure_events) == 1
+    event = final_failure_events[0]
+    assert event.attempt_count == 5
+    assert event.final_exception_type == "ScoreValidationError"
+    assert event.final_diagnostics == diagnostics[:10]
 
 def test_validation_failure_logs_event(caplog, monkeypatch):
     melody = generate_melody_score(_sample_request())

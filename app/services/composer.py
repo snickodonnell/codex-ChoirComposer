@@ -53,6 +53,21 @@ class VerseFormConstraintError(ValueError):
     pass
 
 
+class MelodyGenerationFailedError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempt_count: int,
+        final_exception_type: str,
+        final_diagnostics: list[str],
+    ) -> None:
+        super().__init__(message)
+        self.attempt_count = attempt_count
+        self.final_exception_type = final_exception_type
+        self.final_diagnostics = final_diagnostics
+
+
 @dataclass
 class PlannedVerseForm:
     pickup_beats: float
@@ -1726,6 +1741,8 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     primary_mode = req.preferences.primary_mode
     error_history: list[str] = []
+    last_failure_exception_type = "UnknownMelodyGenerationFailure"
+    last_failure_diagnostics: list[str] = []
 
     log_event(logger, "melody_generation_started", section_count=len(req.sections))
     for attempt_idx in range(MAX_GENERATION_ATTEMPTS):
@@ -1741,8 +1758,11 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
                 reason="canonical_verse_form_projection_failed",
                 diagnostics=str(exc),
             )
-            raise ValueError(
-                "We couldn’t fit a later verse into Verse 1’s form. Please simplify the text for that verse (or adjust Bars per Verse when that option is available)."
+            raise MelodyGenerationFailedError(
+                "We couldn’t fit a later verse into Verse 1’s form. Please simplify the text for that verse (or adjust Bars per Verse when that option is available).",
+                attempt_count=attempt,
+                final_exception_type=type(exc).__name__,
+                final_diagnostics=[str(exc)],
             ) from exc
         harmony_issues = [
             err
@@ -1788,11 +1808,16 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
 
         log_event(logger, "validation_failed", level=logging.WARNING, stage="melody_generation", attempt=attempt, reason="post_repair", diagnostics=repaired_errs)
         log_event(logger, "repair_retry_attempt", level=logging.WARNING, attempt=attempt, reason="post_repair_validation_failure")
+        last_failure_exception_type = "ScoreValidationError"
+        last_failure_diagnostics = list(repaired_errs)
         error_history.append(f"attempt {attempt}: {'; '.join(repaired_errs)}")
 
     log_event(logger, "melody_generation_exhausted", level=logging.ERROR, diagnostics=error_history)
-    raise ValueError(
-        "Couldn’t generate a valid melody with the current constraints—try relaxing key/mode/time/tempo or click Regenerate"
+    raise MelodyGenerationFailedError(
+        "Couldn’t generate a valid melody with the current constraints—try relaxing key/mode/time/tempo or click Regenerate",
+        attempt_count=MAX_GENERATION_ATTEMPTS,
+        final_exception_type=last_failure_exception_type,
+        final_diagnostics=last_failure_diagnostics or ["unknown validation failure"],
     )
 
 
