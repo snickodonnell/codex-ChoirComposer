@@ -39,6 +39,30 @@ def test_export_pdf_requires_satb_stage():
     assert res.json()["detail"]["request_id"]
 
 
+
+
+def test_validate_score_endpoint_returns_valid_true_for_generated_score():
+    melody = generate_melody_score(_sample_request())
+
+    res = client.post("/api/validate-score", json={"score": melody.model_dump()})
+
+    assert res.status_code == 200
+    assert res.json() == {"valid": True, "errors": []}
+
+
+def test_validate_score_endpoint_reports_errors_and_request_id(monkeypatch):
+    melody = generate_melody_score(_sample_request())
+
+    monkeypatch.setattr(main_module, "validate_score", lambda *_args, **_kwargs: ["diagnostic: mismatch"])
+
+    res = client.post("/api/validate-score", json={"score": melody.model_dump()})
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["valid"] is False
+    assert "failed validation" in payload["message"]
+    assert payload["request_id"]
+
 def test_compose_end_score_endpoint_runs_full_workflow():
     req = _sample_request()
 
