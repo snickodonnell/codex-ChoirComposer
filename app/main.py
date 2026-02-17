@@ -128,7 +128,11 @@ def index() -> FileResponse:
 @app.post("/api/generate-melody", response_model=MelodyResponse)
 def generate_melody_endpoint(payload: CompositionRequest):
     arrangement_labels = [item.section_id for item in payload.arrangement]
-    clusters = [item.progression_cluster for item in payload.arrangement if item.progression_cluster]
+    section_by_id = { (section.id or f"section-{idx}"): section for idx, section in enumerate(payload.sections, start=1) }
+    selected_units = [
+        ("verse" if section_by_id.get(item.section_id) and section_by_id[item.section_id].is_verse else (section_by_id.get(item.section_id).label if section_by_id.get(item.section_id) else ""))
+        for item in payload.arrangement
+    ]
     log_event(
         logger,
         "arrangement_inputs_received",
@@ -138,7 +142,7 @@ def generate_melody_endpoint(payload: CompositionRequest):
         tempo_bpm=payload.preferences.tempo_bpm,
         section_labels=[section.label for section in payload.sections],
         arrangement_order=arrangement_labels,
-        clusters_selected=clusters,
+        music_units_selected=[u for u in selected_units if u],
     )
     try:
         score = normalize_score_for_rendering(generate_melody_score(payload))
@@ -158,13 +162,14 @@ def refine_melody_endpoint(payload: RefineRequest):
             operation="update",
             target="melody",
             regenerate=payload.regenerate,
-            selected_clusters=payload.selected_clusters,
+            selected_units=payload.selected_units or payload.selected_clusters,
         )
         return MelodyResponse(
             score=normalize_score_for_rendering(refine_score(
                 payload.score,
                 payload.instruction,
                 payload.regenerate,
+                payload.selected_units,
                 payload.selected_clusters,
                 payload.section_clusters,
             ))
@@ -196,6 +201,7 @@ def refine_satb_endpoint(payload: RefineRequest):
             melody_projection,
             payload.instruction,
             payload.regenerate,
+            payload.selected_units,
             payload.selected_clusters,
             payload.section_clusters,
         )
