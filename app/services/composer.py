@@ -791,6 +791,89 @@ def _project_verse_rhythm_to_template(section_id: str, syllables: list["ScoreSyl
     return projected
 
 
+def _split_duration_for_slot_expansion(duration: float) -> list[float] | None:
+    if abs(duration - 2.0) < 1e-9:
+        return [1.0, 1.0]
+    if abs(duration - 1.5) < 1e-9:
+        return [1.0, 0.5]
+    if abs(duration - 1.0) < 1e-9:
+        return [0.5, 0.5]
+    return None
+
+
+def _expand_verse_template_slots(
+    template_plan: list[dict],
+    target_slot_count: int,
+    beat_cap: float,
+    time_signature: str,
+    phrase_end_indices: list[int],
+) -> tuple[list[dict], list[int], int]:
+    expanded = [
+        {
+            "durations": list(item["durations"]),
+            "modes": list(item["modes"]),
+            "stressed": bool(item.get("stressed", False)),
+        }
+        for item in template_plan
+    ]
+    adjusted_phrase_end_indices = list(phrase_end_indices)
+    splits_count = 0
+
+    while len(expanded) < target_slot_count:
+        cursor = 0.0
+        candidates: list[tuple[float, int, int, int, int, list[float]]] = []
+        cadence_indices = set(adjusted_phrase_end_indices)
+        for slot_idx, item in enumerate(expanded):
+            slot_start = cursor
+            slot_is_cadence = slot_idx in cadence_indices
+            weak_beat_priority = 0 if not _is_strong_beat(slot_start % beat_cap, time_signature) else 1
+            cadence_priority = 1 if slot_is_cadence else 0
+            best_duration_idx: int | None = None
+            best_split: list[float] | None = None
+            best_duration_value = -1.0
+            for duration_idx, duration in enumerate(item["durations"]):
+                split = _split_duration_for_slot_expansion(duration)
+                if not split:
+                    continue
+                if min(split) < 0.5 - 1e-9:
+                    continue
+                if duration > best_duration_value:
+                    best_duration_idx = duration_idx
+                    best_split = split
+                    best_duration_value = duration
+
+            if best_duration_idx is not None and best_split is not None:
+                priority = (-best_duration_value, weak_beat_priority, cadence_priority, slot_idx)
+                candidates.append((priority[0], priority[1], priority[2], priority[3], best_duration_idx, best_split))
+
+            cursor += sum(item["durations"])
+
+        if not candidates:
+            break
+
+        candidates.sort()
+        _, _, _, slot_idx, duration_idx, split_durations = candidates[0]
+        slot = expanded[slot_idx]
+        original_mode = slot["modes"][duration_idx] if duration_idx < len(slot["modes"]) else "single"
+
+        first_slot = {
+            "durations": [split_durations[0]],
+            "modes": [original_mode if original_mode != "melisma_continue" else "single"],
+            "stressed": slot.get("stressed", False),
+        }
+        second_slot = {
+            "durations": [split_durations[1]],
+            "modes": ["single"],
+            "stressed": False,
+        }
+
+        expanded[slot_idx : slot_idx + 1] = [first_slot, second_slot]
+        adjusted_phrase_end_indices = [index + 1 if index >= slot_idx else index for index in adjusted_phrase_end_indices]
+        splits_count += 1
+
+    return expanded, adjusted_phrase_end_indices, splits_count
+
+
 def _align_verse_syllables_to_template(section_id: str, syllables: list[ScoreSyllable], template_count: int) -> list[ScoreSyllable]:
     if template_count <= 0:
         return []
@@ -857,6 +940,13 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     arranged_instances = _expand_arrangement(req)
     arrangement_music_units = _build_arrangement_music_units(arranged_instances)
 
+    verse_syllable_counts = [
+        len(tokenize_phrase_blocks(f"verse-precompute-{idx}", phrase_blocks))
+        for idx, (_sid, _label, is_verse, _unit, _mode, _beats, phrase_blocks) in enumerate(arranged_instances, start=1)
+        if is_verse
+    ]
+    max_verse_syllable_count = max(verse_syllable_counts) if verse_syllable_counts else 0
+
     verse_rhythm_template: list[dict] | None = None
     verse_template_anacrusis_beats: float | None = None
     verse_template_phrase_end_indices: list[int] = []
@@ -919,20 +1009,81 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
                 ]
                 verse_template_anacrusis_beats = anacrusis_beats
                 verse_template_phrase_end_indices = phrase_end_indices_from_blocks
-            elif verse_rhythm_template:
-                try:
-                    syllables = _align_verse_syllables_to_template(section_id, syllables, len(verse_rhythm_template))
-                except ValueError as exc:
+                if max_verse_syllable_count > len(verse_rhythm_template):
+                    expanded_template, expanded_phrase_end_indices, splits_count = _expand_verse_template_slots(
+                        verse_rhythm_template,
+                        max_verse_syllable_count,
+                        beat_cap,
+                        ts,
+                        verse_template_phrase_end_indices,
+                    )
+                    if len(expanded_template) < max_verse_syllable_count:
+                        log_event(
+                            logger,
+                            "verse_template_alignment_failed",
+                            level=logging.WARNING,
+                            section_id=section_id,
+                            syllable_count=max_verse_syllable_count,
+                            template_syllable_count=len(verse_rhythm_template),
+                            expanded_slot_count=len(expanded_template),
+                            reason="insufficient_splittable_durations_in_canonical_verse_skeleton",
+                        )
+                        raise VerseFormConstraintError(
+                            f"Verse form overflow for {section_id}: {max_verse_syllable_count} syllables cannot fit canonical "
+                            f"{len(verse_rhythm_template)}-slot skeleton"
+                        )
                     log_event(
                         logger,
-                        "verse_template_alignment_failed",
-                        level=logging.WARNING,
+                        "verse_slot_expansion_applied",
                         section_id=section_id,
-                        syllable_count=len(syllables),
-                        template_syllable_count=len(verse_rhythm_template),
-                        reason="syllable_overflow_against_canonical_verse_skeleton",
+                        before_slots=len(verse_rhythm_template),
+                        after_slots=len(expanded_template),
+                        splits_count=splits_count,
                     )
-                    raise exc
+                    verse_rhythm_template = expanded_template
+                    verse_template_phrase_end_indices = expanded_phrase_end_indices
+
+                syllables = _align_verse_syllables_to_template(section_id, syllables, len(verse_rhythm_template))
+                _apply_phrase_end_indices(syllables, verse_template_phrase_end_indices, phrase_blocks)
+                rhythm_plan = _project_verse_rhythm_to_template(section_id, syllables, verse_rhythm_template)
+            elif verse_rhythm_template:
+                projected_template = verse_rhythm_template
+                projected_phrase_end_indices = list(verse_template_phrase_end_indices)
+                if len(syllables) > len(verse_rhythm_template):
+                    projected_template, projected_phrase_end_indices, splits_count = _expand_verse_template_slots(
+                        verse_rhythm_template,
+                        len(syllables),
+                        beat_cap,
+                        ts,
+                        verse_template_phrase_end_indices,
+                    )
+                    if len(projected_template) < len(syllables):
+                        log_event(
+                            logger,
+                            "verse_template_alignment_failed",
+                            level=logging.WARNING,
+                            section_id=section_id,
+                            syllable_count=len(syllables),
+                            template_syllable_count=len(verse_rhythm_template),
+                            expanded_slot_count=len(projected_template),
+                            reason="insufficient_splittable_durations_in_canonical_verse_skeleton",
+                        )
+                        raise VerseFormConstraintError(
+                            f"Verse form overflow for {section_id}: {len(syllables)} syllables cannot fit canonical "
+                            f"{len(verse_rhythm_template)}-slot skeleton"
+                        )
+                    log_event(
+                        logger,
+                        "verse_slot_expansion_applied",
+                        section_id=section_id,
+                        before_slots=len(verse_rhythm_template),
+                        after_slots=len(projected_template),
+                        splits_count=splits_count,
+                    )
+                    verse_rhythm_template = projected_template
+                    verse_template_phrase_end_indices = projected_phrase_end_indices
+
+                syllables = _align_verse_syllables_to_template(section_id, syllables, len(verse_rhythm_template))
                 _apply_phrase_end_indices(syllables, verse_template_phrase_end_indices, phrase_blocks)
                 anacrusis_beats = verse_template_anacrusis_beats or 0.0
                 rhythm_plan = _project_verse_rhythm_to_template(section_id, syllables, verse_rhythm_template)

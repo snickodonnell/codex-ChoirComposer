@@ -163,3 +163,39 @@ def test_client_log_endpoint_records_playback_events(caplog):
     assert res.status_code == 200
     assert res.json()["ok"] is True
     assert any(getattr(record, "event", "") == "client_playback_event" for record in caplog.records)
+
+
+def test_generate_melody_allows_verse_projection_overflow_with_slot_expansion():
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me\nI once was lost but now am found\nWas blind but now I see",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Twas grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed",
+            },
+            {
+                "id": "v3",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Through many dangers toils and snares\nI have already come\nTis grace hath brought me safe thus far\nAnd grace will lead me home",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True},
+            {"section_id": "v2", "is_verse": True},
+            {"section_id": "v3", "is_verse": True},
+        ],
+        "preferences": {"key": "G", "time_signature": "4/4", "tempo_bpm": 92, "lyric_rhythm_preset": "mixed"},
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+
+    assert res.status_code == 200
+    assert any(section.get("verse_number") == 3 for section in res.json()["score"]["sections"])

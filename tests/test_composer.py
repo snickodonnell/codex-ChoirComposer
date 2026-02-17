@@ -992,3 +992,60 @@ def test_phrase_contour_bias_prefers_up_then_down_motion():
     assert directional_observations
     assert any(first >= 0 for first, _ in directional_observations)
     assert any(second <= 0 for _, second in directional_observations)
+
+
+def test_amazing_grace_verse3_overflow_projects_with_slot_expansion_and_stacks_lyric_three():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(
+                id="v1",
+                label="Verse",
+                is_verse=True,
+                text="Amazing grace how sweet the sound\nThat saved a wretch like me\nI once was lost but now am found\nWas blind but now I see",
+            ),
+            LyricSection(
+                id="v2",
+                label="Verse",
+                is_verse=True,
+                text="Twas grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed",
+            ),
+            LyricSection(
+                id="v3",
+                label="Verse",
+                is_verse=True,
+                text="Through many dangers toils and snares\nI have already come\nTis grace hath brought me safe thus far\nAnd grace will lead me home",
+            ),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1", is_verse=True),
+            ArrangementItem(section_id="v2", is_verse=True),
+            ArrangementItem(section_id="v3", is_verse=True),
+        ],
+        preferences=CompositionPreferences(time_signature="4/4", key="G", lyric_rhythm_preset="mixed"),
+    )
+
+    melody = generate_melody_score(req)
+    xml = export_musicxml(melody)
+
+    assert 'lyric number="3"' in xml
+
+    verse_one_measures = {
+        measure.number
+        for measure in melody.measures
+        if any(note.section_id == "sec-1" for note in measure.voices["soprano"])
+    }
+    verse_three_measures = {
+        measure.number
+        for measure in melody.measures
+        if any(note.section_id == "sec-3" for note in measure.voices["soprano"])
+    }
+    assert len(verse_three_measures) == len(verse_one_measures)
+
+    verse_three_sung_notes = [
+        note
+        for measure in melody.measures
+        for note in measure.voices["soprano"]
+        if note.section_id == "sec-3" and not note.is_rest
+    ]
+    assert verse_three_sung_notes
+    assert min(note.beats for note in verse_three_sung_notes) >= 0.5 - 1e-9
