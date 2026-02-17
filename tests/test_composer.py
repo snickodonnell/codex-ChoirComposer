@@ -114,6 +114,27 @@ def test_phrase_search_prefers_less_fragmented_syllabic_templates():
     short_count = sum(1 for item in plan for d in item["durations"] if d <= 0.5 + 1e-9)
     assert short_count <= len(plan)
 
+
+def test_tokenization_prefers_natural_stress_for_common_suffix_words():
+    syllables = tokenize_section_lyrics("sec-1", "glorious motion")
+    by_word = {}
+    for syllable in syllables:
+        by_word.setdefault(syllable.word_text.lower(), []).append(syllable)
+
+    assert by_word["glorious"][0].stressed is True
+    assert by_word["motion"][0].stressed is False
+    assert by_word["motion"][1].stressed is True
+
+
+def test_phrase_plan_prefers_cadence_hold_on_final_stressed_syllable():
+    syllables = tokenize_section_lyrics("sec-1", "holy motion")
+    cfg = config_for_preset("mixed", "verse")
+    plan = plan_syllable_rhythm(syllables, 4, cfg, "seed-cadence")
+
+    motion_tail = [item for item in plan if item["syllable_text"].lower() == "ion"]
+    assert motion_tail
+    assert sum(motion_tail[-1]["durations"]) >= 1.0
+
 def test_phrase_blocks_can_merge_with_next_phrase_to_form_run_on_phrase():
     req = CompositionRequest(
         sections=[LyricSection(id="verse-1", label="verse", text="glory rises\nforever amen")],

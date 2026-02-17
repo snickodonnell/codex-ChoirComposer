@@ -114,6 +114,7 @@ def _tokenize_phrase_blocks_internal(section_id: str, phrase_blocks: list[Phrase
             parts = tok.split("-")
             for part_idx, part in enumerate(parts):
                 sylls = split_word_into_syllables(part)
+                stressed_index = _primary_stress_index(part, sylls)
                 for si, syl in enumerate(sylls):
                     out.append(
                         ScoreSyllable(
@@ -124,7 +125,7 @@ def _tokenize_phrase_blocks_internal(section_id: str, phrase_blocks: list[Phrase
                             syllable_index_in_word=si,
                             word_text=tok,
                             hyphenated=(len(parts) > 1 and part_idx < len(parts) - 1),
-                            stressed=_is_stressed(syl, si, len(sylls)),
+                            stressed=_is_stressed(syl, si, len(sylls), stressed_index),
                             phrase_end_after=False,
                             must_end_at_barline=block.must_end_at_barline,
                             breath_after_phrase=False,
@@ -145,10 +146,27 @@ def _tokenize_phrase_blocks_internal(section_id: str, phrase_blocks: list[Phrase
     return out
 
 
-def _is_stressed(syllable: str, syllable_index: int, syllable_count: int) -> bool:
+def _primary_stress_index(word: str, syllables: list[str]) -> int:
+    if not syllables:
+        return 0
+    count = len(syllables)
+    if count == 1:
+        return 0
+
+    normalized = re.sub(r"[^a-z]", "", word.lower())
+    if normalized.endswith(("tion", "sion", "ture", "cian", "cial", "ic")):
+        return 1 if count == 2 else min(count - 1, max(0, count - 2))
+    if count >= 3 and normalized.endswith(("ity", "graphy", "logy", "metry", "ative", "ify")):
+        return min(count - 1, max(0, count - 3))
+    if count == 2 and normalized.endswith(("al", "er", "or", "ing", "ed")):
+        return 0
+    return 0
+
+
+def _is_stressed(syllable: str, syllable_index: int, syllable_count: int, primary_stress_index: int) -> bool:
     if syllable_count == 1:
         return True
-    if syllable_index == 0:
+    if syllable_index == primary_stress_index:
         return True
     return len(syllable) >= 4
 
@@ -206,6 +224,7 @@ def _score_phrase_template(
 ) -> tuple[float, float]:
     beat_pos = 0.0
     score = 0.0
+    cadence_idx = max((idx for idx, syllable in enumerate(phrase) if syllable.stressed), default=len(phrase) - 1)
     durations_for_leap = [sum(durations) for durations, _ in template]
     continuation_count = sum(
         1
@@ -216,14 +235,27 @@ def _score_phrase_template(
 
     for idx, syllable in enumerate(phrase):
         durations, _ = template[idx]
-        if syllable.stressed and _is_strong_beat(beat_pos, beats_per_bar):
-            score += 2.0
+        syllable_total = sum(durations)
+        is_strong_beat = _is_strong_beat(beat_pos, beats_per_bar)
+
+        if syllable.stressed and is_strong_beat:
+            score += 2.75
         elif syllable.stressed:
-            score -= 1.0
+            score -= 1.25
+
+        if syllable.phrase_end_after and is_strong_beat:
+            score += 1.75
+
+        if idx == cadence_idx:
+            if is_strong_beat:
+                score += 2.5
+            else:
+                score -= 1.25
+            score += min(2.5, max(0.0, syllable_total - 1.0) * 1.8)
 
         short_notes = sum(1 for duration in durations if duration <= 0.5 + 1e-9)
         score -= 0.5 * short_notes
-        beat_pos += sum(durations)
+        beat_pos += syllable_total
 
     for i in range(1, len(durations_for_leap)):
         gap = abs(durations_for_leap[i] - durations_for_leap[i - 1])
