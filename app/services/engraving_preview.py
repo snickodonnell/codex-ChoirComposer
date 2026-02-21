@@ -40,8 +40,8 @@ class EngravingPreviewService:
             log_event(logger, "engraving_preview_cache_hit", cache_key=cache_key, pages=len(cached))
             return cached, True
 
-        musicxml = export_musicxml(score)
-        artifacts = self._render_svg_pages(musicxml, options)
+        musicxml = self.build_musicxml(score)
+        artifacts = self.render_svg_pages(musicxml, options)
         with self._cache_lock:
             self._cache[cache_key] = artifacts
         log_event(logger, "engraving_preview_cache_store", cache_key=cache_key, pages=len(artifacts))
@@ -60,7 +60,10 @@ class EngravingPreviewService:
         digest = hashlib.sha256(json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         return f"engraving:v1:{digest}"
 
-    def _render_svg_pages(self, musicxml: str, options: EngravingOptions) -> list[PreviewArtifact]:
+    def build_musicxml(self, score: CanonicalScore) -> str:
+        return export_musicxml(score)
+
+    def build_toolkit(self, musicxml: str, options: EngravingOptions):
         try:
             import verovio  # type: ignore
         except ImportError as exc:  # pragma: no cover - depends on deployment image
@@ -78,6 +81,10 @@ class EngravingPreviewService:
             "svgViewBox": True,
         })
         toolkit.loadData(musicxml)
+        return toolkit
+
+    def render_svg_pages(self, musicxml: str, options: EngravingOptions) -> list[PreviewArtifact]:
+        toolkit = self.build_toolkit(musicxml, options)
 
         page_count = max(1, int(toolkit.getPageCount()))
         final_page_count = page_count if options.include_all_pages else 1
