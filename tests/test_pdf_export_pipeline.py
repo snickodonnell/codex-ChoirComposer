@@ -1,4 +1,7 @@
+import io
+
 from fastapi.testclient import TestClient
+from pypdf import PdfReader
 
 from app.main import app
 from app.models import ArrangementItem, CompositionPreferences, CompositionRequest, LyricSection
@@ -25,12 +28,17 @@ def _satb_score_with_verses():
     return harmonize_score(generate_melody_score(req))
 
 
-def test_pdf_export_succeeds_without_preview_dependency(monkeypatch):
+def test_pdf_export_succeeds_when_preview_pipeline_succeeds(monkeypatch):
     satb = _satb_score_with_verses()
+
+    class StubExportResult:
+        pdf_bytes = b"%PDF-stub"
+        page_count = 1
+        pipeline = "svg_to_pdf"
 
     class StubExportService:
         def export_pdf(self, score, options=None):
-            return b"%PDF-stub"
+            return StubExportResult()
 
     monkeypatch.setattr("app.main.export_service", StubExportService())
 
@@ -38,15 +46,21 @@ def test_pdf_export_succeeds_without_preview_dependency(monkeypatch):
 
     assert pdf_res.status_code == 200
     assert pdf_res.headers["content-type"] == "application/pdf"
+    assert pdf_res.headers["x-composer-warnings-count"] == "0"
     assert pdf_res.content == b"%PDF-stub"
 
 
 def test_pdf_export_blocks_only_on_fatal_diagnostics(monkeypatch):
     satb = _satb_score_with_verses()
 
+    class StubExportResult:
+        pdf_bytes = b"%PDF-warning-ok"
+        page_count = 1
+        pipeline = "svg_to_pdf"
+
     class StubExportService:
         def export_pdf(self, score, options=None):
-            return b"%PDF-warning-ok"
+            return StubExportResult()
 
     monkeypatch.setattr("app.main.export_service", StubExportService())
 
@@ -57,6 +71,7 @@ def test_pdf_export_blocks_only_on_fatal_diagnostics(monkeypatch):
     warning_res = client.post("/api/export-pdf", json={"score": satb.model_dump()})
     assert warning_res.status_code == 200
     assert warning_res.headers["x-export-warnings"]
+    assert warning_res.headers["x-composer-warnings-count"] == "1"
 
     monkeypatch.setattr(
         "app.main.validate_score_diagnostics",
@@ -66,17 +81,24 @@ def test_pdf_export_blocks_only_on_fatal_diagnostics(monkeypatch):
     assert fatal_res.status_code == 422
 
 
-def test_pdf_export_uses_musicxml_with_multiverse_stacking(monkeypatch):
+def test_pdf_export_svg_fallback_non_empty_and_page_count_matches_svg(monkeypatch):
     satb = _satb_score_with_verses()
     service = EngravingExportService()
-    captured_musicxml = {"value": ""}
 
     class StubToolkit:
         def getPageCount(self):
-            return 1
+            return 2
 
         def renderToPDF(self):
-            return b"%PDF-musicxml"
+            raise RuntimeError("native unavailable")
+
+        def renderToSVG(self, page):
+            return (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+                f'<text x="20" y="50">Page {page}</text></svg>'
+            )
+
+    captured_musicxml = {"value": ""}
 
     def _capture_toolkit(musicxml, options):
         captured_musicxml["value"] = musicxml
@@ -84,8 +106,11 @@ def test_pdf_export_uses_musicxml_with_multiverse_stacking(monkeypatch):
 
     monkeypatch.setattr("app.services.engraving_export.preview_service.build_toolkit", _capture_toolkit)
 
-    pdf_content = service.export_pdf(satb)
+    result = service.export_pdf(satb)
 
-    assert pdf_content.startswith(b"%PDF")
+    assert result.pdf_bytes.startswith(b"%PDF")
+    assert len(result.pdf_bytes) > 100
+    assert result.page_count == 2
+    assert result.pipeline == "svg_to_pdf"
+    assert len(PdfReader(io.BytesIO(result.pdf_bytes)).pages) == result.page_count
     assert 'lyric number="2"' in captured_musicxml["value"]
-

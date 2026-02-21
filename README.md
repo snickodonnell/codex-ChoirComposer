@@ -8,7 +8,7 @@ AI-assisted web application that composes melody-first choir arrangements from u
 - **Canonical score model:** Strict `CanonicalScore` JSON schema
 - **Music notation rendering:** VexFlow (in-app)
 - **Audio preview:** Tone.js synth playback in app
-- **Export:** ReportLab PDF + MusicXML
+- **Export:** Verovio SVG engraving + CairoSVG/pypdf PDF assembly + MusicXML
 
 ## Core architecture
 All generation produces one canonical `CanonicalScore` first. Then every downstream feature consumes the same model:

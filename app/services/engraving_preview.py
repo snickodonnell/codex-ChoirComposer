@@ -35,6 +35,11 @@ class EngravingLayoutConfig:
 DEFAULT_LAYOUT = EngravingLayoutConfig()
 
 
+def _clamp_system_spacing(value: int) -> int:
+    # Verovio expects spacingSystem in the inclusive range [0, 100].
+    return max(0, min(100, value))
+
+
 @dataclass(frozen=True)
 class EngravingOptions:
     include_all_pages: bool = False
@@ -98,7 +103,7 @@ class EngravingPreviewService:
             "pageHeight": options.layout.page_height,
             "adjustPageHeight": True,
             "breaks": "auto",
-            "spacingSystem": options.layout.system_spacing,
+            "spacingSystem": _clamp_system_spacing(options.layout.system_spacing),
             "spacingStaff": options.layout.staff_spacing,
             "spacingLinear": 0.3,
             "justifyVertically": True,
