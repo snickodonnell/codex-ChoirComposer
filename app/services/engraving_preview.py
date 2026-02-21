@@ -20,11 +20,25 @@ class PreviewArtifact:
 
 
 @dataclass(frozen=True)
-class EngravingOptions:
-    include_all_pages: bool = False
-    scale: int = 42
+class EngravingLayoutConfig:
     page_width: int = 2100
     page_height: int = 2970
+    scale: int = 42
+    system_spacing: int = 120
+    staff_spacing: int = 10
+    margin_top: int = 80
+    margin_bottom: int = 80
+    margin_left: int = 80
+    margin_right: int = 80
+
+
+DEFAULT_LAYOUT = EngravingLayoutConfig()
+
+
+@dataclass(frozen=True)
+class EngravingOptions:
+    include_all_pages: bool = False
+    layout: EngravingLayoutConfig = DEFAULT_LAYOUT
 
 
 class EngravingPreviewService:
@@ -52,9 +66,17 @@ class EngravingPreviewService:
             "score": score.model_dump(mode="json"),
             "options": {
                 "include_all_pages": options.include_all_pages,
-                "scale": options.scale,
-                "page_width": options.page_width,
-                "page_height": options.page_height,
+                "layout": {
+                    "scale": options.layout.scale,
+                    "page_width": options.layout.page_width,
+                    "page_height": options.layout.page_height,
+                    "system_spacing": options.layout.system_spacing,
+                    "staff_spacing": options.layout.staff_spacing,
+                    "margin_top": options.layout.margin_top,
+                    "margin_bottom": options.layout.margin_bottom,
+                    "margin_left": options.layout.margin_left,
+                    "margin_right": options.layout.margin_right,
+                },
             },
         }
         digest = hashlib.sha256(json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -71,11 +93,22 @@ class EngravingPreviewService:
 
         toolkit = verovio.toolkit()
         toolkit.setOptions({
-            "scale": options.scale,
-            "pageWidth": options.page_width,
-            "pageHeight": options.page_height,
+            "scale": options.layout.scale,
+            "pageWidth": options.layout.page_width,
+            "pageHeight": options.layout.page_height,
             "adjustPageHeight": True,
             "breaks": "auto",
+            "spacingSystem": options.layout.system_spacing,
+            "spacingStaff": options.layout.staff_spacing,
+            "spacingLinear": 0.3,
+            "justifyVertically": True,
+            "systemMaxPerPage": 0,
+            "pageMarginTop": options.layout.margin_top,
+            "pageMarginBottom": options.layout.margin_bottom,
+            "pageMarginLeft": options.layout.margin_left,
+            "pageMarginRight": options.layout.margin_right,
+            "mnumInterval": 1,
+            "condense": "none",
             "footer": "none",
             "header": "none",
             "svgViewBox": True,

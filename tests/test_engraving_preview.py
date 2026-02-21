@@ -110,3 +110,32 @@ def test_preview_endpoint_fails_with_fatal_diagnostics(monkeypatch):
     res = client.post("/api/engrave/preview", json=payload)
 
     assert res.status_code == 422
+
+
+def test_build_toolkit_applies_hymn_layout_options(monkeypatch):
+    captured = {}
+
+    class StubToolkit:
+        def setOptions(self, options):
+            captured["options"] = options
+
+        def loadData(self, musicxml):
+            captured["musicxml"] = musicxml
+
+    class StubVerovio:
+        @staticmethod
+        def toolkit():
+            return StubToolkit()
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "verovio", StubVerovio)
+    service = engraving_preview.EngravingPreviewService()
+    toolkit = service.build_toolkit("<score-partwise/>", engraving_preview.EngravingOptions())
+
+    assert toolkit is not None
+    assert captured["options"]["breaks"] == "auto"
+    assert captured["options"]["spacingSystem"] == engraving_preview.DEFAULT_LAYOUT.system_spacing
+    assert captured["options"]["spacingStaff"] == engraving_preview.DEFAULT_LAYOUT.staff_spacing
+    assert captured["options"]["condense"] == "none"
+    assert captured["options"]["pageMarginTop"] == engraving_preview.DEFAULT_LAYOUT.margin_top

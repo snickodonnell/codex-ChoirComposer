@@ -32,7 +32,7 @@ from app.models import (
 )
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score
 from app.services.musicxml_export import export_musicxml
-from app.services.engraving_preview import EngravingOptions, preview_service
+from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, preview_service
 from app.services.engraving_export import export_service
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score, validate_score_diagnostics
@@ -364,7 +364,20 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
     except ValueError as exc:
         raise _handle_user_error(action, exc) from exc
 
-    options = EngravingOptions(include_all_pages=payload.include_all_pages, scale=payload.scale)
+    options = EngravingOptions(
+        include_all_pages=payload.include_all_pages,
+        layout=EngravingLayoutConfig(
+            page_width=DEFAULT_LAYOUT.page_width,
+            page_height=DEFAULT_LAYOUT.page_height,
+            scale=payload.scale,
+            system_spacing=DEFAULT_LAYOUT.system_spacing,
+            staff_spacing=DEFAULT_LAYOUT.staff_spacing,
+            margin_top=DEFAULT_LAYOUT.margin_top,
+            margin_bottom=DEFAULT_LAYOUT.margin_bottom,
+            margin_left=DEFAULT_LAYOUT.margin_left,
+            margin_right=DEFAULT_LAYOUT.margin_right,
+        ),
+    )
     log_event(
         logger,
         "engraving_preview_started",
