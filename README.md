@@ -52,6 +52,20 @@ On first load, the UI is pre-seeded with a known-good hymn dataset (sections, ar
 
 If you want to clear and reseed from that baseline at any time, click **Load Hymn Test Data**.
 
+## PDF export dependencies
+Install Python PDF dependencies with extras:
+
+```bash
+pip install .[pdf]
+```
+
+Install Cairo system library:
+- macOS: `brew install cairo`
+- Ubuntu/Debian: `sudo apt-get install libcairo2`
+- Windows: use Docker (recommended) or install Cairo through MSYS2/Chocolatey.
+
+If these dependencies are not installed, SVG engraving preview still works, but PDF export may be unavailable.
+
 ## Tests
 ```bash
 pytest

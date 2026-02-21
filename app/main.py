@@ -33,7 +33,8 @@ from app.models import (
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, preview_service
-from app.services.engraving_export import export_service
+from app.services.engraving_export import PDFExportDependencyError, export_service
+from app.services.pdf_deps import check_pdf_export_capabilities
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score, validate_score_diagnostics
 
@@ -316,9 +317,29 @@ def export_pdf_endpoint(payload: PDFExportRequest):
     if diagnostics.warnings:
         log_event(logger, "validation_failed", level=logging.WARNING, action=action, diagnostics=diagnostics.warnings)
 
+    capabilities = check_pdf_export_capabilities()
+    log_event(
+        logger,
+        "pdf_export_capabilities",
+        verovio_pdf_available=capabilities["verovio_pdf_available"],
+        fallback_svg_to_pdf_available=capabilities["fallback_svg_to_pdf_available"],
+        missing=capabilities["missing"],
+    )
+    if not capabilities["verovio_pdf_available"] and not capabilities["fallback_svg_to_pdf_available"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "PDF export requires Cairo system library. Install via brew/apt/choco or use Docker.",
+                "request_id": current_request_id(),
+            },
+        )
+
     log_event(logger, "export_started", format="pdf")
     try:
         export_result = export_service.export_pdf(normalized_score)
+    except PDFExportDependencyError as exc:
+        log_event(logger, "export_failed", format="pdf", level=logging.WARNING, error_message=str(exc))
+        raise HTTPException(status_code=422, detail={"message": str(exc), "request_id": current_request_id()}) from exc
     except Exception as exc:
         log_event(
             logger,
@@ -352,6 +373,11 @@ def export_pdf_endpoint(payload: PDFExportRequest):
         media_type="application/pdf",
         headers=response_headers,
     )
+
+
+@app.get("/api/export-pdf/capabilities")
+def export_pdf_capabilities_endpoint():
+    return check_pdf_export_capabilities()
 
 
 @app.post("/api/export-musicxml")
