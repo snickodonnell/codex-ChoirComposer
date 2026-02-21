@@ -116,3 +116,58 @@ def test_pdf_export_svg_fallback_non_empty_and_page_count_matches_svg(monkeypatc
     assert result.pipeline == "svg_to_pdf"
     assert len(PdfReader(io.BytesIO(result.pdf_bytes)).pages) == result.page_count
     assert 'lyric number="2"' in captured_musicxml["value"]
+
+def test_pdf_export_returns_422_when_native_and_fallback_unavailable(monkeypatch):
+    satb = _satb_score_with_verses()
+    monkeypatch.setattr(
+        "app.main.check_pdf_export_capabilities",
+        lambda: {
+            "verovio_pdf_available": False,
+            "cairosvg_available": False,
+            "pypdf_available": False,
+            "cairo_native_available": False,
+            "fallback_svg_to_pdf_available": False,
+            "missing": ["cairosvg", "pypdf", "cairo_native", "verovio_pdf"],
+            "help": ["Install Python dependencies with: pip install .[pdf]"],
+        },
+    )
+
+    pdf_res = client.post("/api/export-pdf", json={"score": satb.model_dump()})
+
+    assert pdf_res.status_code == 422
+    detail = pdf_res.json()["detail"]
+    assert "Cairo system library" in detail["message"]
+    assert detail["request_id"]
+
+
+def test_pdf_export_uses_fallback_when_available(monkeypatch):
+    satb = _satb_score_with_verses()
+
+    class StubExportResult:
+        pdf_bytes = b"%PDF-fallback"
+        page_count = 1
+        pipeline = "svg_to_pdf"
+
+    class StubExportService:
+        def export_pdf(self, score, options=None):
+            return StubExportResult()
+
+    monkeypatch.setattr("app.main.export_service", StubExportService())
+    monkeypatch.setattr(
+        "app.main.check_pdf_export_capabilities",
+        lambda: {
+            "verovio_pdf_available": False,
+            "cairosvg_available": True,
+            "pypdf_available": True,
+            "cairo_native_available": True,
+            "fallback_svg_to_pdf_available": True,
+            "missing": ["verovio_pdf"],
+            "help": [],
+        },
+    )
+
+    pdf_res = client.post("/api/export-pdf", json={"score": satb.model_dump()})
+
+    assert pdf_res.status_code == 200
+    assert pdf_res.headers["content-type"] == "application/pdf"
+    assert pdf_res.content == b"%PDF-fallback"

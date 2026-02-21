@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.logging_utils import current_request_id, log_event
 from app.models import CanonicalScore
+from app.services.pdf_deps import check_pdf_export_capabilities
 from app.services.engraving_preview import EngravingOptions, preview_service
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,13 @@ class PDFExportResult:
     pipeline: str
 
 
+class PDFExportDependencyError(RuntimeError):
+    pass
+
+
 class EngravingExportService:
     def export_pdf(self, score: CanonicalScore, options: EngravingOptions | None = None) -> PDFExportResult:
+        capabilities = check_pdf_export_capabilities()
         engraving_options = options or EngravingOptions(include_all_pages=True)
         log_event(
             logger,
@@ -45,6 +51,10 @@ class EngravingExportService:
             )
             pdf_bytes = self._render_pdf_native(toolkit)
         except Exception as exc:
+            if not capabilities["fallback_svg_to_pdf_available"]:
+                raise PDFExportDependencyError(
+                    "PDF export requires Cairo system library. Install via brew/apt/choco or use Docker."
+                ) from exc
             log_event(
                 logger,
                 "pdf_export_falling_back_to_svg_pipeline",
