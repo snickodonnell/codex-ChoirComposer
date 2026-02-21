@@ -25,27 +25,17 @@ def _satb_score_with_verses():
     return harmonize_score(generate_melody_score(req))
 
 
-def test_pdf_export_succeeds_when_preview_succeeds(monkeypatch):
+def test_pdf_export_succeeds_without_preview_dependency(monkeypatch):
     satb = _satb_score_with_verses()
-
-    class StubPreviewService:
-        def render_preview(self, score, options):
-            return [], False
 
     class StubExportService:
         def export_pdf(self, score, options=None):
             return b"%PDF-stub"
 
-    monkeypatch.setattr("app.main.preview_service", StubPreviewService())
     monkeypatch.setattr("app.main.export_service", StubExportService())
 
-    preview_res = client.post(
-        "/api/engrave/preview",
-        json={"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": False, "scale": 42},
-    )
     pdf_res = client.post("/api/export-pdf", json={"score": satb.model_dump()})
 
-    assert preview_res.status_code == 200
     assert pdf_res.status_code == 200
     assert pdf_res.headers["content-type"] == "application/pdf"
     assert pdf_res.content == b"%PDF-stub"
