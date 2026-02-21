@@ -318,21 +318,36 @@ def export_pdf_endpoint(payload: PDFExportRequest):
 
     log_event(logger, "export_started", format="pdf")
     try:
-        content = export_service.export_pdf(normalized_score)
-    except RuntimeError as exc:
-        log_event(logger, "export_failed", format="pdf", level=logging.ERROR, reason=str(exc))
+        export_result = export_service.export_pdf(normalized_score)
+    except Exception as exc:
+        log_event(
+            logger,
+            "export_failed",
+            format="pdf",
+            level=logging.ERROR,
+            exception_type=type(exc).__name__,
+            error_message=str(exc),
+        )
         raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
 
-    log_event(logger, "export_completed", format="pdf", output_size_bytes=len(content))
+    log_event(
+        logger,
+        "export_completed",
+        format="pdf",
+        output_size_bytes=len(export_result.pdf_bytes),
+        page_count=export_result.page_count,
+        pipeline=export_result.pipeline,
+    )
     response_headers = {
         "Content-Disposition": "attachment; filename=choir-score.pdf",
         "X-Request-ID": current_request_id(),
+        "X-Composer-Warnings-Count": str(len(diagnostics.warnings)),
     }
     if diagnostics.warnings:
         response_headers["X-Export-Warnings"] = json.dumps(diagnostics.warnings)
 
     return Response(
-        content=content,
+        content=export_result.pdf_bytes,
         media_type="application/pdf",
         headers=response_headers,
     )
