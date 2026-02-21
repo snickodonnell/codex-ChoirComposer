@@ -42,7 +42,6 @@ def export_musicxml(score: CanonicalScore) -> str:
     beats_i, beat_type_i = _parse_time_signature(score.meta.time_signature)
     divisions = _resolve_divisions(score)
     fifths, mode = _key_signature(score.meta.key)
-    measure_duration = beats_i * divisions
     chords = {c.measure_number: c for c in score.chord_progression}
     breath_mark_positions = _collect_breath_mark_positions(score)
 
@@ -64,10 +63,12 @@ def export_musicxml(score: CanonicalScore) -> str:
     ]
 
     exported_measure_numbers = set(music_unit_plan.exported_measures)
+    pickup_measure_numbers = _pickup_measure_numbers(score, beats_i)
     for measure in score.measures:
         if measure.number not in exported_measure_numbers:
             continue
-        lines.append(f'    <measure number="{measure.number}">')
+        implicit_attr = ' implicit="yes"' if measure.number in pickup_measure_numbers else ""
+        lines.append(f'    <measure number="{measure.number}"{implicit_attr}>')
         if measure.number == 1:
             lines.extend(
                 [
@@ -100,24 +101,60 @@ def export_musicxml(score: CanonicalScore) -> str:
         if measure.number in chords:
             lines.extend(_harmony_xml(chords[measure.number]))
 
-        lines.extend(
-            _voice_measure_xml(
-                score,
-                measure.number,
-                "soprano",
-                1,
-                1,
-                divisions,
-                breath_mark_positions,
-                music_unit_plan.stacked_lyrics,
-            )
+        soprano_lines, soprano_duration = _voice_measure_xml(
+            score,
+            measure.number,
+            "soprano",
+            1,
+            1,
+            divisions,
+            breath_mark_positions,
+            music_unit_plan.stacked_lyrics,
+            suppress_leading_padding_rests=measure.number in pickup_measure_numbers,
         )
-        lines.extend(_backup_xml(measure_duration))
-        lines.extend(_voice_measure_xml(score, measure.number, "alto", 2, 1, divisions, set()))
-        lines.extend(_backup_xml(measure_duration))
-        lines.extend(_voice_measure_xml(score, measure.number, "tenor", 3, 2, divisions, set()))
-        lines.extend(_backup_xml(measure_duration))
-        lines.extend(_voice_measure_xml(score, measure.number, "bass", 4, 2, divisions, set()))
+        lines.extend(soprano_lines)
+
+        alto_lines, alto_duration = _voice_measure_xml(
+            score,
+            measure.number,
+            "alto",
+            2,
+            1,
+            divisions,
+            set(),
+            suppress_leading_padding_rests=measure.number in pickup_measure_numbers,
+        )
+        if alto_lines:
+            lines.extend(_backup_xml(soprano_duration))
+            lines.extend(alto_lines)
+
+        tenor_lines, tenor_duration = _voice_measure_xml(
+            score,
+            measure.number,
+            "tenor",
+            3,
+            2,
+            divisions,
+            set(),
+            suppress_leading_padding_rests=measure.number in pickup_measure_numbers,
+        )
+        if tenor_lines:
+            lines.extend(_backup_xml(alto_duration if alto_lines else soprano_duration))
+            lines.extend(tenor_lines)
+
+        bass_lines, _bass_duration = _voice_measure_xml(
+            score,
+            measure.number,
+            "bass",
+            4,
+            2,
+            divisions,
+            set(),
+            suppress_leading_padding_rests=measure.number in pickup_measure_numbers,
+        )
+        if bass_lines:
+            lines.extend(_backup_xml(tenor_duration if tenor_lines else (alto_duration if alto_lines else soprano_duration)))
+            lines.extend(bass_lines)
 
         lines.append("    </measure>")
 
@@ -133,6 +170,23 @@ def export_musicxml(score: CanonicalScore) -> str:
     )
     return content
 
+
+
+def _pickup_measure_numbers(score: CanonicalScore, beats_per_measure: int) -> set[int]:
+    form = score.meta.verse_music_unit_form
+    if form is None or form.pickup_beats <= 0:
+        return set()
+
+    pickup_numbers: set[int] = set()
+    for measure in score.measures:
+        non_padding_beats = sum(
+            note.beats
+            for note in measure.voices["soprano"]
+            if not (note.is_rest and note.section_id == "padding")
+        )
+        if 0 < non_padding_beats < beats_per_measure:
+            pickup_numbers.add(measure.number)
+    return pickup_numbers
 
 def _arrangement_music_unit_comments(score: CanonicalScore) -> list[str]:
     if not score.meta.arrangement_music_units:
@@ -156,13 +210,21 @@ def _voice_measure_xml(
     divisions: int,
     breath_mark_positions: set[tuple[int, int]],
     stacked_lyrics: dict[tuple[int, int], list[tuple[int, "ScoreNote"]]] | None = None,
-) -> list[str]:
+    suppress_leading_padding_rests: bool = False,
+) -> tuple[list[str], int]:
     measure = next((m for m in score.measures if m.number == measure_number), None)
     if not measure:
-        return []
+        return [], 0
+
+    notes = measure.voices[voice_name]
+    start_index = 0
+    if suppress_leading_padding_rests:
+        while start_index < len(notes) and notes[start_index].is_rest and notes[start_index].section_id == "padding":
+            start_index += 1
 
     lines: list[str] = []
-    for note_index, note in enumerate(measure.voices[voice_name]):
+    rendered_duration = 0
+    for note_index, note in enumerate(notes[start_index:], start=start_index):
         duration = max(1, int(round(note.beats * divisions)))
         note_type, dotted = _note_type_from_duration(note.beats)
 
@@ -179,6 +241,7 @@ def _voice_measure_xml(
             lines.append("        </pitch>")
 
         lines.append(f"        <duration>{duration}</duration>")
+        rendered_duration += duration
         lines.append(f"        <voice>{voice_number}</voice>")
         lines.append(f"        <type>{note_type}</type>")
         if dotted:
@@ -205,7 +268,7 @@ def _voice_measure_xml(
             )
 
         lines.append("      </note>")
-    return lines
+    return lines, rendered_duration
 
 
 
@@ -282,7 +345,7 @@ def _build_music_unit_export_plan(score: CanonicalScore) -> _MusicUnitExportPlan
         exported_sections.add(section_id)
         section_headers[section_id] = section_by_id.get(section_id).label if section_id in section_by_id else f"{unit.music_unit_id} Verse {unit.verse_index}"
 
-    exported_measures = sorted({n for sid in exported_sections for n in spans.get(sid, [])})
+    exported_measures = sorted({n for sid in exported_sections for n in spans.get(sid, [])} | spans.get("interlude", set()))
     if not exported_measures:
         exported_measures = measure_numbers
 

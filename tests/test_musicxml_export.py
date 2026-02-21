@@ -237,3 +237,41 @@ def test_export_musicxml_stacks_non_consecutive_verses_with_deterministic_number
     assert "<text>Grace</text>" in xml
     assert "<text>Sound</text>" in xml
     assert "<words>Verse (Verse 1, Verse 2, Verse 3)</words>" in xml
+
+
+def test_export_musicxml_hymn_layout_supports_pickup_multiverse_and_section_breaks():
+    req = CompositionRequest(
+        sections=[
+            LyricSection(id="v1", label="Verse 1", is_verse=True, text="Amazing grace how sweet the sound\nThat saved a wretch like me"),
+            LyricSection(id="c", label="Chorus", is_verse=False, text="Praise God from whom all blessings flow"),
+            LyricSection(id="v2", label="Verse 2", is_verse=True, text="Twas grace that taught my heart to fear\nAnd grace my fears relieved"),
+            LyricSection(id="v3", label="Verse 3", is_verse=True, text="Through many dangers toils and snares\nI have already come"),
+        ],
+        arrangement=[
+            ArrangementItem(section_id="v1", is_verse=True, anacrusis_mode="manual", anacrusis_beats=1),
+            ArrangementItem(section_id="c", is_verse=False),
+            ArrangementItem(section_id="v2", is_verse=True, anacrusis_mode="manual", anacrusis_beats=1),
+            ArrangementItem(section_id="v3", is_verse=True, anacrusis_mode="manual", anacrusis_beats=1),
+        ],
+        preferences=CompositionPreferences(key="C", time_signature="4/4", tempo_bpm=90, bars_per_verse=16),
+    )
+
+    satb = harmonize_score(generate_melody_score(req))
+    xml = export_musicxml(satb)
+
+    assert '<lyric number="1">' in xml
+    assert '<lyric number="2">' in xml
+    assert '<lyric number="3">' in xml
+    assert '<measure number="1" implicit="yes">' in xml
+    assert xml.count('<print new-system="yes"/>') >= 2
+
+    def _measure_count(section_id: str) -> int:
+        return sum(
+            1
+            for measure in satb.measures
+            if any(note.section_id == section_id for note in measure.voices["soprano"])
+        )
+
+    assert _measure_count("sec-1") == 16
+    assert _measure_count("sec-3") == 16
+    assert _measure_count("sec-4") == 16
