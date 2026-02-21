@@ -1,7 +1,7 @@
 import io
 
+import pytest
 from fastapi.testclient import TestClient
-from pypdf import PdfReader
 
 from app.main import app
 from app.models import ArrangementItem, CompositionPreferences, CompositionRequest, LyricSection
@@ -82,6 +82,8 @@ def test_pdf_export_blocks_only_on_fatal_diagnostics(monkeypatch):
 
 
 def test_pdf_export_svg_fallback_non_empty_and_page_count_matches_svg(monkeypatch):
+    pytest.importorskip("cairosvg")
+    PdfReader = pytest.importorskip("pypdf").PdfReader
     satb = _satb_score_with_verses()
     service = EngravingExportService()
 
