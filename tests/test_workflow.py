@@ -30,15 +30,19 @@ def test_generate_satb_rejects_satb_input_stage():
     assert res.json()["detail"]["request_id"]
 
 
-def test_export_pdf_requires_satb_stage():
+def test_export_pdf_accepts_melody_stage(monkeypatch):
     melody = generate_melody_score(_sample_request())
+
+    class StubExportService:
+        def export_pdf(self, score, options=None):
+            return b"%PDF-melody"
+
+    monkeypatch.setattr(main_module, "export_service", StubExportService())
 
     res = client.post("/api/export-pdf", json={"score": melody.model_dump()})
 
-    assert res.status_code == 422
-    assert "PDF export failed" in res.json()["detail"]["message"]
-    assert res.json()["detail"]["request_id"]
-
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/pdf"
 
 
 

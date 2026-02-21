@@ -324,6 +324,42 @@ function showComposerWarnings(warnings = []) {
   composerWarningsEl.style.display = 'block';
 }
 
+function parseWarningsHeader(headerValue) {
+  if (!headerValue) return [];
+  try {
+    const parsed = JSON.parse(headerValue);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string' && item.trim()) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function sanitizeFilenamePart(input) {
+  return String(input || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9-_ ]+/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase();
+}
+
+function buildPdfFilename(score) {
+  const maybeTitle = score?.meta?.title || score?.meta?.composition_title || score?.meta?.piece_title || '';
+  const titlePart = sanitizeFilenamePart(maybeTitle);
+  if (titlePart) {
+    return `choircomposer-${titlePart}-score.pdf`;
+  }
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return `choircomposer-score-${timestamp}.pdf`;
+}
+
+function activePdfExportScore() {
+  if (satbScore?.meta?.stage === 'satb') return satbScore;
+  if (melodyScore?.meta?.stage === 'melody') return melodyScore;
+  return satbScore || melodyScore || null;
+}
+
 function showErrors(errors) {
   clearValidationHighlights();
   if (!errors.length) {
@@ -1443,7 +1479,7 @@ function updateWorkflowStatus() {
 
   if (melodyScore) {
     workflowStageLabelEl.textContent = 'Current stage: 3) SATB Harmonization';
-    workflowStageHintEl.textContent = 'Melody is ready. Generate SATB next to unlock export.';
+    workflowStageHintEl.textContent = 'Melody is ready. You can export melody PDF now, or generate SATB next.';
     return;
   }
 
@@ -1465,7 +1501,7 @@ function updateActionAvailability() {
   setButtonEnabled(startSATBBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(pauseSATBBtn, hasSatb, 'Generate SATB first.');
   setButtonEnabled(stopSATBBtn, hasSatb, 'Generate SATB first.');
-  setButtonEnabled(exportPDFBtn, hasSatb, 'Generate SATB first.');
+  setButtonEnabled(exportPDFBtn, hasMelody || hasSatb, 'Generate a melody first.');
   setButtonEnabled(exportMusicXMLBtn, hasSatb, 'Generate SATB first.');
 
   updateWorkflowStatus();
@@ -1665,18 +1701,28 @@ pauseSATBBtn.onclick = () => pausePlayback('satb');
 stopSATBBtn.onclick = () => stopPlayback('satb');
 
 exportPDFBtn.onclick = async () => {
-  if (!satbScore) {
-    showErrors(['Generate SATB before exporting PDF.']);
+  const exportScore = activePdfExportScore();
+  if (!exportScore) {
+    showErrors(['Generate a melody before exporting PDF.']);
     return;
   }
-  const res = await post('/api/export-pdf', { score: satbScore });
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'choir-score.pdf';
-  a.click();
-  URL.revokeObjectURL(url);
+
+  try {
+    const res = await post('/api/export-pdf', { score: exportScore });
+    const warningHeader = res.headers.get('X-Export-Warnings') || res.headers.get('x-export-warnings');
+    const warnings = parseWarningsHeader(warningHeader);
+    showComposerWarnings(warnings);
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = buildPdfFilename(exportScore);
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    showErrors([`Unable to export PDF right now. ${formatApiErrorMessage(error)}`]);
+  }
 };
 
 

@@ -304,7 +304,8 @@ def validate_score_endpoint(payload: HarmonizeRequest):
 def export_pdf_endpoint(payload: PDFExportRequest):
     action = "PDF export"
     try:
-        _require_score_stage(payload.score, "satb", action)
+        if payload.score.meta.stage not in {"melody", "satb"}:
+            raise ValueError("Score stage must be melody or satb before PDF export.")
     except ValueError as exc:
         raise _handle_user_error(action, exc) from exc
 
