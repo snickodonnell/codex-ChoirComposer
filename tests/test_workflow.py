@@ -6,6 +6,7 @@ from app import main as main_module
 from app.main import app
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score
+from app.services.engraving_export import PDFExportResult
 from app.services.score_validation import ValidationDiagnostics
 
 
@@ -35,7 +36,7 @@ def test_export_pdf_accepts_melody_stage(monkeypatch):
 
     class StubExportService:
         def export_pdf(self, score, options=None):
-            return b"%PDF-melody"
+            return PDFExportResult(pdf_bytes=b"%PDF-melody", page_count=1, pipeline="native_pdf")
 
     monkeypatch.setattr(main_module, "export_service", StubExportService())
 

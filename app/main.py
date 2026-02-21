@@ -337,6 +337,7 @@ def export_pdf_endpoint(payload: PDFExportRequest):
         output_size_bytes=len(export_result.pdf_bytes),
         page_count=export_result.page_count,
         pipeline=export_result.pipeline,
+        pipeline_path="native" if export_result.pipeline == "native_pdf" else "fallback",
     )
     response_headers = {
         "Content-Disposition": "attachment; filename=choir-score.pdf",

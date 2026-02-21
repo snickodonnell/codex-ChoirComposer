@@ -6,7 +6,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.logging_utils import log_event
+from app.logging_utils import current_request_id, log_event
 from app.models import CanonicalScore
 from app.services.engraving_preview import EngravingOptions, preview_service
 
@@ -23,6 +23,13 @@ class PDFExportResult:
 class EngravingExportService:
     def export_pdf(self, score: CanonicalScore, options: EngravingOptions | None = None) -> PDFExportResult:
         engraving_options = options or EngravingOptions(include_all_pages=True)
+        log_event(
+            logger,
+            "pdf_export_pipeline_entry",
+            request_id=current_request_id(),
+            stage=score.meta.stage,
+            measure_count=len(score.measures),
+        )
         musicxml = preview_service.build_musicxml(score)
         toolkit = preview_service.build_toolkit(musicxml, engraving_options)
 
@@ -31,16 +38,22 @@ class EngravingExportService:
 
         pipeline = "native_pdf"
         try:
+            log_event(
+                logger,
+                "pdf_export_attempt_native",
+                spacingSystem=max(0, min(100, engraving_options.layout.system_spacing)),
+            )
             pdf_bytes = self._render_pdf_native(toolkit)
         except Exception as exc:
             log_event(
                 logger,
-                "pdf_export_native_unavailable",
+                "pdf_export_falling_back_to_svg_pipeline",
                 level=logging.WARNING,
                 exception_type=type(exc).__name__,
                 error_message=str(exc),
             )
             svg_pages = self._render_svg_pages(toolkit, page_count)
+            log_event(logger, "pdf_export_using_cairosvg_fallback", svg_page_count=len(svg_pages))
             pdf_bytes = self._render_pdf_from_svg(svg_pages)
             pipeline = "svg_to_pdf"
 
