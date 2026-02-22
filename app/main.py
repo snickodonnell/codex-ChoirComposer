@@ -34,7 +34,7 @@ from app.services.composer import MelodyGenerationFailedError, generate_melody_s
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, preview_service
 from app.services.engraving_export import PDFExportDependencyError, export_service
-from app.services.pdf_deps import check_pdf_export_capabilities
+from app.services.pdf_deps import cairo_dependency_message, check_pdf_export_capabilities
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score, validate_score_diagnostics
 
@@ -326,10 +326,18 @@ def export_pdf_endpoint(payload: PDFExportRequest):
         missing=capabilities["missing"],
     )
     if not capabilities["verovio_pdf_available"] and not capabilities["fallback_svg_to_pdf_available"]:
+        message = cairo_dependency_message()
+        log_event(
+            logger,
+            "pdf_export_dependency_missing",
+            level=logging.WARNING,
+            request_id=current_request_id(),
+            missing_dep="cairo",
+        )
         raise HTTPException(
             status_code=422,
             detail={
-                "message": "PDF export requires Cairo system library. Install via brew/apt/choco or use Docker.",
+                "message": message,
                 "request_id": current_request_id(),
             },
         )
@@ -338,7 +346,14 @@ def export_pdf_endpoint(payload: PDFExportRequest):
     try:
         export_result = export_service.export_pdf(normalized_score)
     except PDFExportDependencyError as exc:
-        log_event(logger, "export_failed", format="pdf", level=logging.WARNING, error_message=str(exc))
+        log_event(
+            logger,
+            "pdf_export_dependency_missing",
+            level=logging.WARNING,
+            request_id=current_request_id(),
+            missing_dep="cairo",
+            error_message=str(exc),
+        )
         raise HTTPException(status_code=422, detail={"message": str(exc), "request_id": current_request_id()}) from exc
     except Exception as exc:
         log_event(
