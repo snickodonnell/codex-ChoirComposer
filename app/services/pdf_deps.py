@@ -1,10 +1,30 @@
 from __future__ import annotations
 
 import importlib
+import platform
 from functools import lru_cache
 
 
 _CAIRO_HELP_TEXT = "Install Cairo system library (macOS: brew install cairo, Ubuntu/Debian: sudo apt-get install libcairo2, Windows: use Docker or MSYS2/Chocolatey Cairo package)."
+
+
+def cairo_install_hint() -> str:
+    os_name = platform.system().lower()
+    if os_name == "darwin":
+        return "macOS hint: brew install cairo"
+    if os_name == "linux":
+        return "Debian/Ubuntu hint: sudo apt-get install -y libcairo2"
+    if os_name == "windows":
+        return "Windows hint: prefer Docker, or install Cairo via MSYS2"
+    return "Install libcairo for your OS and restart the server"
+
+
+def cairo_dependency_message() -> str:
+    detected_os = platform.system() or "Unknown"
+    return (
+        "PDF export requires the system library Cairo (libcairo). Install it and restart the server. "
+        f"Detected OS: {detected_os}. {cairo_install_hint()}"
+    )
 
 
 @lru_cache(maxsize=1)

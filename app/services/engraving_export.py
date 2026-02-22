@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.logging_utils import current_request_id, log_event
 from app.models import CanonicalScore
-from app.services.pdf_deps import check_pdf_export_capabilities
+from app.services.pdf_deps import cairo_dependency_message, check_pdf_export_capabilities
 from app.services.engraving_preview import EngravingOptions, preview_service
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,7 @@ class EngravingExportService:
             pdf_bytes = self._render_pdf_native(toolkit)
         except Exception as exc:
             if not capabilities["fallback_svg_to_pdf_available"]:
-                raise PDFExportDependencyError(
-                    "PDF export requires Cairo system library. Install via brew/apt/choco or use Docker."
-                ) from exc
+                raise PDFExportDependencyError(cairo_dependency_message()) from exc
             log_event(
                 logger,
                 "pdf_export_falling_back_to_svg_pipeline",
@@ -116,7 +114,12 @@ class EngravingExportService:
 
         writer = PdfWriter()
         for svg in svg_pages:
-            page_pdf = cairosvg.svg2pdf(bytestring=svg.encode("utf-8"))
+            try:
+                page_pdf = cairosvg.svg2pdf(bytestring=svg.encode("utf-8"))
+            except OSError as exc:
+                if "cairo" in str(exc).lower():
+                    raise PDFExportDependencyError(cairo_dependency_message()) from exc
+                raise
             reader = PdfReader(io.BytesIO(page_pdf))
             for page in reader.pages:
                 writer.add_page(page)

@@ -59,12 +59,18 @@ Install Python PDF dependencies with extras:
 pip install .[pdf]
 ```
 
-Install Cairo system library:
+Install Cairo system library on the **server runtime** (the machine/container running `uvicorn`):
 - macOS: `brew install cairo`
-- Ubuntu/Debian: `sudo apt-get install libcairo2`
-- Windows: use Docker (recommended) or install Cairo through MSYS2/Chocolatey.
+- Ubuntu/Debian: `sudo apt-get install -y libcairo2`
+- Windows: use Docker (recommended) or install Cairo via MSYS2.
 
-If these dependencies are not installed, SVG engraving preview still works, but PDF export may be unavailable.
+After installing Cairo, restart the API server.
+
+If Cairo is missing at runtime, `POST /api/export-pdf` now returns HTTP `422` with a user-facing message:
+
+> PDF export requires the system library Cairo (libcairo). Install it and restart the server.
+
+SVG engraving preview still works without Cairo, but PDF export will be unavailable until Cairo is installed.
 
 ## Tests
 ```bash

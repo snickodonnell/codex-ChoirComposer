@@ -13,6 +13,18 @@ from app.services.score_validation import ValidationDiagnostics
 client = TestClient(app)
 
 
+def _capabilities_available():
+    return {
+        "verovio_pdf_available": True,
+        "cairosvg_available": True,
+        "pypdf_available": True,
+        "cairo_native_available": True,
+        "fallback_svg_to_pdf_available": True,
+        "missing": [],
+        "help": [],
+    }
+
+
 def _satb_score_with_verses():
     req = CompositionRequest(
         sections=[
@@ -41,6 +53,7 @@ def test_pdf_export_succeeds_when_preview_pipeline_succeeds(monkeypatch):
             return StubExportResult()
 
     monkeypatch.setattr("app.main.export_service", StubExportService())
+    monkeypatch.setattr("app.main.check_pdf_export_capabilities", _capabilities_available)
 
     pdf_res = client.post("/api/export-pdf", json={"score": satb.model_dump()})
 
@@ -63,6 +76,7 @@ def test_pdf_export_blocks_only_on_fatal_diagnostics(monkeypatch):
             return StubExportResult()
 
     monkeypatch.setattr("app.main.export_service", StubExportService())
+    monkeypatch.setattr("app.main.check_pdf_export_capabilities", _capabilities_available)
 
     monkeypatch.setattr(
         "app.main.validate_score_diagnostics",
@@ -136,9 +150,33 @@ def test_pdf_export_returns_422_when_native_and_fallback_unavailable(monkeypatch
 
     assert pdf_res.status_code == 422
     detail = pdf_res.json()["detail"]
-    assert "Cairo system library" in detail["message"]
+    assert "PDF export requires the system library Cairo (libcairo)." in detail["message"]
     assert detail["request_id"]
 
+
+def test_pdf_export_returns_422_when_export_service_reports_missing_cairo(monkeypatch):
+    satb = _satb_score_with_verses()
+
+    class StubExportService:
+        def export_pdf(self, score, options=None):
+            from app.services.engraving_export import PDFExportDependencyError
+
+            raise PDFExportDependencyError(
+                "PDF export requires the system library Cairo (libcairo). Install it and restart the server."
+            )
+
+    monkeypatch.setattr("app.main.export_service", StubExportService())
+    monkeypatch.setattr(
+        "app.main.check_pdf_export_capabilities",
+        _capabilities_available,
+    )
+
+    pdf_res = client.post("/api/export-pdf", json={"score": satb.model_dump()})
+
+    assert pdf_res.status_code == 422
+    detail = pdf_res.json()["detail"]
+    assert "PDF export requires the system library Cairo (libcairo). Install it and restart the server." in detail["message"]
+    assert detail["request_id"]
 
 def test_pdf_export_uses_fallback_when_available(monkeypatch):
     satb = _satb_score_with_verses()

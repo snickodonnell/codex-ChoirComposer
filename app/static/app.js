@@ -1419,7 +1419,8 @@ async function post(url, payload) {
 
     const requestIdFromHeader = res.headers.get('X-Request-ID');
     const requestIdFromBody = typeof data === 'object' && data !== null ? data.request_id : null;
-    const requestId = requestIdFromHeader || requestIdFromBody || null;
+    const requestIdFromDetail = typeof data?.detail === 'object' && data?.detail !== null ? data.detail.request_id : null;
+    const requestId = requestIdFromHeader || requestIdFromBody || requestIdFromDetail || null;
 
     let message = 'Request failed.';
     if (data && typeof data === 'object') {
@@ -1427,6 +1428,8 @@ async function post(url, payload) {
         message = data.message;
       } else if (typeof data.detail === 'string' && data.detail.trim()) {
         message = data.detail;
+      } else if (typeof data.detail === 'object' && data.detail !== null && typeof data.detail.message === 'string' && data.detail.message.trim()) {
+        message = data.detail.message;
       } else if (typeof data.error === 'string' && data.error.trim()) {
         message = data.error;
       } else if (Array.isArray(data.detail)) {
@@ -1721,7 +1724,12 @@ exportPDFBtn.onclick = async () => {
     a.click();
     URL.revokeObjectURL(url);
   } catch (error) {
-    showErrors([`Unable to export PDF right now. ${formatApiErrorMessage(error)}`]);
+    const message = formatApiErrorMessage(error);
+    if (error?.response?.status === 422) {
+      showErrors([message]);
+    } else {
+      showErrors([`Unable to export PDF right now. ${message}`]);
+    }
   }
 };
 
