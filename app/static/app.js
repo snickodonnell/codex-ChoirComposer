@@ -1199,6 +1199,85 @@ function renderPreviewSvgs(target, artifacts, cacheHit) {
   setPreviewStatus(target, `Rendered ${artifacts.length} page(s)${cacheHit ? ' · cache hit' : ''}.`);
 }
 
+function buildEngravingBannerDecision(stage, endpoint, details = {}) {
+  const responsePayload = details.responsePayload && typeof details.responsePayload === 'object'
+    ? details.responsePayload
+    : null;
+  const responseKeys = responsePayload ? Object.keys(responsePayload) : [];
+  const hasSvgPages = Array.isArray(details.svgPages) && details.svgPages.length > 0;
+  const decision = {
+    stage,
+    endpoint,
+    httpStatus: Number.isFinite(details.httpStatus) ? details.httpStatus : null,
+    hadException: Boolean(details.hadException),
+    exceptionMessage: details.exceptionMessage ? String(details.exceptionMessage) : null,
+    hasSvgPages,
+    svgPageCount: hasSvgPages ? details.svgPages.length : 0,
+    responseKeys,
+    rendererCheckState: details.rendererCheckState || { ignoredLegacyChecks: true },
+  };
+
+  decision.shouldShowBanner = (
+    (decision.httpStatus !== null && decision.httpStatus !== 200)
+    || !decision.hasSvgPages
+    || decision.hadException
+  );
+
+  return decision;
+}
+
+function extractPreviewSvgPages(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  if (Array.isArray(payload.svg_pages)) {
+    return payload.svg_pages.filter((item) => typeof item === 'string' && item.trim());
+  }
+
+  if (Array.isArray(payload.artifacts)) {
+    return payload.artifacts
+      .map((item) => (item && typeof item === 'object' ? item.svg : null))
+      .filter((item) => typeof item === 'string' && item.trim());
+  }
+
+  return [];
+}
+
+function normalizePreviewArtifacts(payload) {
+  if (Array.isArray(payload?.artifacts) && payload.artifacts.length) {
+    return payload.artifacts;
+  }
+  const svgPages = extractPreviewSvgPages(payload);
+  return svgPages.map((svg, index) => ({ page: index + 1, svg }));
+}
+
+function maybeShowEngravingUnavailableBanner(target, decision) {
+  if (!decision.shouldShowBanner) {
+    return;
+  }
+
+  if (isDevMode) {
+    console.info('[engrave] unavailable banner decision', {
+      stage: decision.stage,
+      endpoint: decision.endpoint,
+      httpStatus: decision.httpStatus,
+      hadException: decision.hadException,
+      exceptionMessage: decision.exceptionMessage,
+      hasSvgPages: decision.hasSvgPages,
+      svgPageCount: decision.svgPageCount,
+      responseKeys: decision.responseKeys,
+      rendererCheckState: decision.rendererCheckState,
+    });
+  }
+
+  if (target === 'satb') {
+    showErrors(['SATB generated, but sheet rendering is temporarily unavailable. Playback/export still work.']);
+    return;
+  }
+  showErrors(['Melody generated, but sheet rendering is temporarily unavailable. Playback/export still work.']);
+}
+
 async function refreshPreview(target) {
   const score = target === 'melody' ? melodyScore : satbScore;
   if (!score) {
@@ -1207,19 +1286,41 @@ async function refreshPreview(target) {
   }
 
   setPreviewStatus(target, 'Rendering preview…');
+  const endpoint = '/api/engrave/preview';
   try {
-    const res = await post('/api/engrave/preview', {
+    const res = await post(endpoint, {
       score,
       preview_mode: target,
       include_all_pages: target === 'satb',
       scale: 42,
     });
     const payload = await res.json();
-    renderPreviewSvgs(target, payload.artifacts, payload.cache_hit);
+    const svgPages = extractPreviewSvgPages(payload);
+    const decision = buildEngravingBannerDecision(target, endpoint, {
+      httpStatus: res.status,
+      hadException: false,
+      responsePayload: payload,
+      svgPages,
+    });
+    maybeShowEngravingUnavailableBanner(target, decision);
+
+    if (!decision.hasSvgPages) {
+      renderPreviewSvgs(target, [], payload.cache_hit);
+      return;
+    }
+
+    renderPreviewSvgs(target, normalizePreviewArtifacts(payload), payload.cache_hit);
     if (payload.warnings?.length) {
       showComposerWarnings(payload.warnings);
     }
   } catch (error) {
+    const decision = buildEngravingBannerDecision(target, endpoint, {
+      httpStatus: error?.response?.status,
+      hadException: true,
+      exceptionMessage: String(error?.message || error),
+      rendererCheckState: { ignoredLegacyChecks: true, warningsAreNonBlocking: true },
+    });
+    maybeShowEngravingUnavailableBanner(target, decision);
     setPreviewStatus(target, `Preview failed: ${String(error.message || error)}`);
   }
 }
@@ -1247,7 +1348,7 @@ function safeRenderSatb(score, harmonizationNotes, heading = 'SATB') {
       renderSatb(normalizeScoreForRendering(score), harmonizationNotes, heading);
       return true;
     } catch (_) {
-      showErrors(['SATB generated, but score rendering is temporarily unavailable. Playback/export still work.']);
+      showErrors(['SATB generated. Inline staff view is unavailable, but preview/playback/export still work.']);
       return false;
     }
   }
@@ -2077,7 +2178,7 @@ function safeRenderMelody(score, heading) {
       renderMelody(normalizeScoreForRendering(score), heading);
       return true;
     } catch (_) {
-      showErrors(['Melody generated, but sheet rendering is temporarily unavailable. Playback/export still work.']);
+      showErrors(['Melody generated. Inline staff view is unavailable, but preview/playback/export still work.']);
       return false;
     }
   }
