@@ -6,7 +6,6 @@ from app import main as main_module
 from app.main import app
 from app.models import CompositionPreferences, CompositionRequest, LyricSection
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score
-from app.services.engraving_export import PDFExportResult
 from app.services.score_validation import ValidationDiagnostics
 
 
@@ -31,19 +30,15 @@ def test_generate_satb_rejects_satb_input_stage():
     assert res.json()["detail"]["request_id"]
 
 
-def test_export_pdf_accepts_melody_stage(monkeypatch):
+def test_export_pdf_returns_501_for_melody_stage():
     melody = generate_melody_score(_sample_request())
-
-    class StubExportService:
-        def export_pdf(self, score, options=None):
-            return PDFExportResult(pdf_bytes=b"%PDF-melody", page_count=1, pipeline="native_pdf")
-
-    monkeypatch.setattr(main_module, "export_service", StubExportService())
 
     res = client.post("/api/export-pdf", json={"score": melody.model_dump()})
 
-    assert res.status_code == 200
-    assert res.headers["content-type"] == "application/pdf"
+    assert res.status_code == 501
+    detail = res.json()["detail"]
+    assert detail["message"] == "PDF export is now generated in the browser. Please update the client."
+    assert detail["request_id"] == res.headers["x-request-id"]
 
 
 
