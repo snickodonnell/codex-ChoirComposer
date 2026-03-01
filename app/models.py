@@ -263,10 +263,25 @@ class EngravingPreviewArtifact(BaseModel):
     svg: str = Field(min_length=1)
 
 
+class SvgMeta(BaseModel):
+    width: str | None = None
+    height: str | None = None
+    viewBox: str | None = None
+    preserveAspectRatio: str | None = None
+    xmlns: str | None = None
+    xmlns_xlink: str | None = Field(default=None, alias="xmlns:xlink")
+    version: str | None = None
+    first_tag_snippet: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
 class EngravingPreviewResponse(BaseModel):
     preview_mode: Literal["melody", "satb"]
     cache_hit: bool
     artifacts: list[EngravingPreviewArtifact]
+    svg_meta: list[SvgMeta] = Field(default_factory=list)
+    svg_hash: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -286,6 +301,8 @@ class EngravingPagesResponse(BaseModel):
     cache_hit: bool
     page_count: int = Field(ge=1)
     pages: list[EngravingPageArtifact]
+    svg_meta: list[SvgMeta] = Field(default_factory=list)
+    svg_hash: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
