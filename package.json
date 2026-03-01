@@ -6,7 +6,8 @@
   "license": "UNLICENSED",
   "dependencies": {
     "canvg": "^4.0.3",
-    "jspdf": "^2.5.2"
+    "jspdf": "^2.5.2",
+    "svg2pdf.js": "^2.5.0"
   },
   "scripts": {
     "bundle:frontend-deps": "node scripts_bundle_frontend_deps.mjs",

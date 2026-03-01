@@ -25,3 +25,21 @@ await build({
 });
 
 console.log(`Bundled canvg to ${path.relative(rootDir, path.join(outDir, 'canvg.browser.js'))}`);
+
+await build({
+  stdin: {
+    contents: "export { jsPDF } from 'jspdf'; export { svg2pdf } from 'svg2pdf.js';",
+    resolveDir: rootDir,
+    sourcefile: 'pdf-vector-entry.js',
+    loader: 'js',
+  },
+  bundle: true,
+  format: 'esm',
+  target: ['es2020'],
+  platform: 'browser',
+  sourcemap: false,
+  outfile: path.join(outDir, 'pdf-vector.browser.js'),
+  logLevel: 'info',
+});
+
+console.log(`Bundled vector PDF deps to ${path.relative(rootDir, path.join(outDir, 'pdf-vector.browser.js'))}`);
