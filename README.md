@@ -8,14 +8,14 @@ AI-assisted web application that composes melody-first choir arrangements from u
 - **Canonical score model:** Strict `CanonicalScore` JSON schema
 - **Music notation rendering:** VexFlow (in-app)
 - **Audio preview:** Tone.js synth playback in app
-- **Export:** Verovio SVG engraving + CairoSVG/pypdf PDF assembly + MusicXML
+- **Export:** Verovio SVG engraving + browser-side PDF assembly (canvg + jsPDF) + MusicXML
 
 ## Core architecture
 All generation produces one canonical `CanonicalScore` first. Then every downstream feature consumes the same model:
 - UI rendering
 - Playback
 - SATB harmonization
-- PDF export
+- PDF export (browser-side SVG -> PDF)
 - MusicXML export
 
 This prevents format drift and keeps lyric/meter/voice consistency checks centralized.
@@ -71,6 +71,14 @@ If Cairo is missing at runtime, `POST /api/export-pdf` now returns HTTP `422` wi
 > PDF export requires the system library Cairo (libcairo). Install it and restart the server.
 
 SVG engraving preview still works without Cairo, but PDF export will be unavailable until Cairo is installed.
+
+
+## Manual verification note (frontend PDF export)
+1. Run the app and generate Melody or SATB.
+2. Click **Download PDF**.
+3. Confirm status updates show progress (`Building PDF page X/N…`).
+4. Confirm downloaded file name format is `ChoirComposer-<title>-<stage>.pdf` (or `ChoirComposer-<stage>.pdf` when title missing).
+5. Open the PDF and compare each page to the engraving preview; pages should match visual layout/page count.
 
 ## Tests
 ```bash

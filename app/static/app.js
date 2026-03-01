@@ -34,6 +34,7 @@ const melodyPreviewStatusEl = document.getElementById('melodyPreviewStatus');
 const satbPreviewStatusEl = document.getElementById('satbPreviewStatus');
 const melodyPreviewZoomEl = document.getElementById('melodyPreviewZoom');
 const satbPreviewZoomEl = document.getElementById('satbPreviewZoom');
+const exportPdfStatusEl = document.getElementById('exportPdfStatus');
 
 const formErrorsEl = document.getElementById('formErrors');
 const composerWarningsEl = document.getElementById('composerWarnings');
@@ -347,17 +348,116 @@ function sanitizeFilenamePart(input) {
 function buildPdfFilename(score) {
   const maybeTitle = score?.meta?.title || score?.meta?.composition_title || score?.meta?.piece_title || '';
   const titlePart = sanitizeFilenamePart(maybeTitle);
+  const stagePart = sanitizeFilenamePart(score?.meta?.stage || 'score');
   if (titlePart) {
-    return `choircomposer-${titlePart}-score.pdf`;
+    return `ChoirComposer-${titlePart}-${stagePart}.pdf`;
   }
-  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  return `choircomposer-score-${timestamp}.pdf`;
+  return `ChoirComposer-${stagePart}.pdf`;
 }
 
 function activePdfExportScore() {
   if (satbScore?.meta?.stage === 'satb') return satbScore;
   if (melodyScore?.meta?.stage === 'melody') return melodyScore;
   return satbScore || melodyScore || null;
+}
+
+function setExportPdfStatus(message) {
+  if (!exportPdfStatusEl) return;
+  exportPdfStatusEl.textContent = message || '';
+}
+
+function parseSvgDimensions(svgText) {
+  const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+  const svgEl = doc.documentElement;
+
+  const parseNumeric = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const num = Number(raw.replace(/px$/i, ''));
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
+
+  const viewBox = (svgEl.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number);
+  const viewBoxWidth = viewBox.length === 4 && Number.isFinite(viewBox[2]) && viewBox[2] > 0 ? viewBox[2] : null;
+  const viewBoxHeight = viewBox.length === 4 && Number.isFinite(viewBox[3]) && viewBox[3] > 0 ? viewBox[3] : null;
+
+  const width = parseNumeric(svgEl.getAttribute('width')) || viewBoxWidth || 816;
+  const height = parseNumeric(svgEl.getAttribute('height')) || viewBoxHeight || 1056;
+  return { width, height };
+}
+
+function delayToKeepUiResponsive() {
+  return new Promise((resolve) => {
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    window.setTimeout(resolve, 0);
+  });
+}
+
+async function renderSvgPageToCanvas(svgText, pageNumber, totalPages, renderScale = 2) {
+  const { width, height } = parseSvgDimensions(svgText);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width * renderScale));
+  canvas.height = Math.max(1, Math.round(height * renderScale));
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error(`Could not initialize canvas context for page ${pageNumber}/${totalPages}.`);
+  }
+
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  const canvgGlobal = window.canvg;
+  const canvgFactory = canvgGlobal?.Canvg?.fromString || canvgGlobal?.fromString;
+  if (typeof canvgFactory !== 'function') {
+    throw new Error('SVG renderer is unavailable (canvg failed to load).');
+  }
+
+  const renderer = await canvgFactory(ctx, svgText, {
+    ignoreAnimation: true,
+    ignoreMouse: true,
+    enableRedraw: false,
+  });
+  await renderer.render();
+  return { canvas, width, height };
+}
+
+async function buildPdfFromSvgPages(pages, score) {
+  if (!Array.isArray(pages) || pages.length === 0) {
+    throw new Error('No engraving pages were returned for PDF export.');
+  }
+
+  const jsPdfCtor = window.jspdf?.jsPDF;
+  if (typeof jsPdfCtor !== 'function') {
+    throw new Error('PDF engine is unavailable (jsPDF failed to load).');
+  }
+
+  setExportPdfStatus(`Building PDF page 1/${pages.length}…`);
+  const firstRendered = await renderSvgPageToCanvas(pages[0].svg, 1, pages.length);
+  const doc = new jsPdfCtor({
+    orientation: firstRendered.width >= firstRendered.height ? 'landscape' : 'portrait',
+    unit: 'pt',
+    format: [firstRendered.width, firstRendered.height],
+    compress: true,
+  });
+  doc.addImage(firstRendered.canvas.toDataURL('image/png'), 'PNG', 0, 0, firstRendered.width, firstRendered.height, undefined, 'FAST');
+
+  for (let i = 1; i < pages.length; i += 1) {
+    await delayToKeepUiResponsive();
+    const pageNumber = i + 1;
+    setExportPdfStatus(`Building PDF page ${pageNumber}/${pages.length}…`);
+    const rendered = await renderSvgPageToCanvas(pages[i].svg, pageNumber, pages.length);
+    doc.addPage([rendered.width, rendered.height], rendered.width >= rendered.height ? 'landscape' : 'portrait');
+    doc.addImage(rendered.canvas.toDataURL('image/png'), 'PNG', 0, 0, rendered.width, rendered.height, undefined, 'FAST');
+  }
+
+  setExportPdfStatus('Finalizing PDF download…');
+  doc.save(buildPdfFilename(score));
+  setExportPdfStatus(`PDF ready (${pages.length} page${pages.length === 1 ? '' : 's'}).`);
 }
 
 function showErrors(errors) {
@@ -1711,19 +1811,23 @@ exportPDFBtn.onclick = async () => {
   }
 
   try {
-    const res = await post('/api/export-pdf', { score: exportScore });
-    const warningHeader = res.headers.get('X-Export-Warnings') || res.headers.get('x-export-warnings');
-    const warnings = parseWarningsHeader(warningHeader);
-    showComposerWarnings(warnings);
+    const stage = exportScore?.meta?.stage;
+    if (stage !== 'melody' && stage !== 'satb') {
+      throw new Error(`Cannot export PDF for unsupported stage: ${String(stage || 'unknown')}`);
+    }
 
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = buildPdfFilename(exportScore);
-    a.click();
-    URL.revokeObjectURL(url);
+    setExportPdfStatus('Requesting engraving pages…');
+    const res = await post('/api/engrave/pages', {
+      score: exportScore,
+      stage,
+      include_all_pages: true,
+      scale: 42,
+    });
+    const payload = await res.json();
+    showComposerWarnings(payload.warnings || []);
+    await buildPdfFromSvgPages(payload.pages || [], exportScore);
   } catch (error) {
+    setExportPdfStatus('');
     const message = formatApiErrorMessage(error);
     if (error?.response?.status === 422) {
       showErrors([message]);
