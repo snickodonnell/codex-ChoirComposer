@@ -248,14 +248,17 @@ def regenerate_melody_endpoint(payload: RegenerateRequest):
             selected_units=payload.selected_units or payload.selected_clusters,
         )
         regeneration_seed = payload.seed or str(uuid.uuid4())
+        score = normalize_score_for_rendering(regenerate_score(
+            payload.score,
+            payload.selected_units,
+            payload.selected_clusters,
+            payload.section_clusters,
+            seed=regeneration_seed,
+        ))
+        warnings = _require_valid_score(score, "Melody regeneration")
         return MelodyResponse(
-            score=normalize_score_for_rendering(regenerate_score(
-                payload.score,
-                payload.selected_units,
-                payload.selected_clusters,
-                payload.section_clusters,
-                seed=regeneration_seed,
-            )),
+            score=score,
+            warnings=warnings,
             seed_strategy_used="random",
             seed_used=regeneration_seed,
         )
@@ -295,7 +298,12 @@ def regenerate_satb_endpoint(payload: RegenerateRequest):
             payload.section_clusters,
         )
         score = normalize_score_for_rendering(harmonize_score(regenerated_melody))
-        return SATBResponse(score=score, harmonization_notes="Regenerated SATB while preserving progression authority.")
+        warnings = _require_valid_score(score, "SATB regeneration")
+        return SATBResponse(
+            score=score,
+            harmonization_notes="Regenerated SATB while preserving progression authority.",
+            warnings=warnings,
+        )
     except ValueError as exc:
         raise _handle_user_error("SATB regeneration", exc) from exc
 

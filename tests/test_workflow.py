@@ -144,6 +144,7 @@ def test_regenerate_endpoint_accepts_cluster_regenerate_payload():
 
     assert res.status_code == 200
     assert res.json()["score"]["meta"]["stage"] == "melody"
+    assert isinstance(res.json().get("warnings"), list)
 
 
 def test_regenerate_satb_endpoint_accepts_cluster_regenerate_payload():
@@ -161,6 +162,7 @@ def test_regenerate_satb_endpoint_accepts_cluster_regenerate_payload():
 
     assert res.status_code == 200
     assert res.json()["score"]["meta"]["stage"] == "satb"
+    assert isinstance(res.json().get("warnings"), list)
 
 
 
