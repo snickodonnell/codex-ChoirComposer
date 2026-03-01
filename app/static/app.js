@@ -35,6 +35,7 @@ const satbPreviewStatusEl = document.getElementById('satbPreviewStatus');
 const melodyPreviewZoomEl = document.getElementById('melodyPreviewZoom');
 const satbPreviewZoomEl = document.getElementById('satbPreviewZoom');
 const exportPdfStatusEl = document.getElementById('exportPdfStatus');
+const exportPdfErrorEl = document.getElementById('exportPdfError');
 
 const formErrorsEl = document.getElementById('formErrors');
 const composerWarningsEl = document.getElementById('composerWarnings');
@@ -426,11 +427,60 @@ async function renderSvgPageToCanvas(svgText, pageNumber, totalPages, renderScal
   return { canvas, width, height };
 }
 
-async function buildPdfFromSvgPages(pages, score) {
-  if (!Array.isArray(pages) || pages.length === 0) {
-    throw new Error('No engraving pages were returned for PDF export.');
+function normalizeEngravingPages(payload) {
+  const rawPages = payload?.pages ?? payload?.artifacts ?? payload?.data?.pages ?? [];
+  if (!Array.isArray(rawPages)) {
+    throw new Error('Engraving returned no SVG pages.');
   }
 
+  const pages = rawPages.map((item, index) => {
+    if (typeof item === 'string') {
+      return { index: index + 1, svg: item };
+    }
+    if (item && typeof item === 'object' && typeof item.svg === 'string') {
+      return { index: item.index || item.page || index + 1, svg: item.svg };
+    }
+    return { index: index + 1, svg: '' };
+  });
+
+  const hasSvgMarkup = pages.length > 0 && pages.every((page) => {
+    if (typeof page.svg !== 'string') return false;
+    const svgText = page.svg.trim();
+    return svgText.startsWith('<svg') || svgText.includes('<svg');
+  });
+
+  if (!hasSvgMarkup) {
+    throw new Error('Engraving returned no SVG pages.');
+  }
+
+  return pages;
+}
+
+function triggerPdfDownload(pdfBytes, filename) {
+  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  let openedInNewTab = false;
+
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    if (/iPad|iPhone|iPod|Safari/i.test(navigator.userAgent) && !/Chrome|CriOS|EdgiOS/i.test(navigator.userAgent)) {
+      const popup = window.open(url, '_blank', 'noopener,noreferrer');
+      openedInNewTab = Boolean(popup);
+    }
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), openedInNewTab ? 15000 : 1000);
+  }
+}
+
+async function buildPdfFromSvgPages(pages, score) {
   const jsPdfCtor = window.jspdf?.jsPDF;
   if (typeof jsPdfCtor !== 'function') {
     throw new Error('PDF engine is unavailable (jsPDF failed to load).');
@@ -455,9 +505,22 @@ async function buildPdfFromSvgPages(pages, score) {
     doc.addImage(rendered.canvas.toDataURL('image/png'), 'PNG', 0, 0, rendered.width, rendered.height, undefined, 'FAST');
   }
 
-  setExportPdfStatus('Finalizing PDF download…');
-  doc.save(buildPdfFilename(score));
-  setExportPdfStatus(`PDF ready (${pages.length} page${pages.length === 1 ? '' : 's'}).`);
+  setExportPdfStatus('Finalizing PDF bytes…');
+  const pdfArrayBuffer = doc.output('arraybuffer');
+  return {
+    pdfBytes: new Uint8Array(pdfArrayBuffer),
+    filename: buildPdfFilename(score),
+    pageCount: pages.length,
+  };
+}
+
+async function runPdfExportSelfCheck() {
+  const samplePage = '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120"><rect width="240" height="120" fill="white" /><text x="16" y="70" font-size="24">PDF self-check</text></svg>';
+  const { pdfBytes } = await buildPdfFromSvgPages([{ index: 1, svg: samplePage }], { meta: { stage: 'melody', title: 'self-test' } });
+  if (!(pdfBytes instanceof Uint8Array) || pdfBytes.byteLength === 0) {
+    throw new Error('PDF self-check failed: empty PDF bytes.');
+  }
+  return pdfBytes.byteLength;
 }
 
 function showErrors(errors) {
@@ -550,7 +613,38 @@ function formatApiErrorMessage(error) {
 }
 
 const isDevMode = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const pdfExportButtonDefaultLabel = exportPDFBtn?.textContent || 'Download PDF';
 let hasLoggedMelodyGenerationErrorDebug = false;
+
+function getClientVersion() {
+  if (typeof document === 'undefined') return 'unknown';
+  const src = document.currentScript?.src || [...document.querySelectorAll('script[src]')].map((el) => el.src).find((item) => item.includes('/static/app.js'));
+  if (!src) return 'unknown';
+  try {
+    const parsed = new URL(src, window.location.origin);
+    return parsed.searchParams.get('v') || 'unknown';
+  } catch (_) {
+    return 'unknown';
+  }
+}
+
+function setExportPdfError(message) {
+  if (!exportPdfErrorEl) return;
+  if (!message) {
+    exportPdfErrorEl.textContent = '';
+    exportPdfErrorEl.style.display = 'none';
+    return;
+  }
+  exportPdfErrorEl.textContent = message;
+  exportPdfErrorEl.style.display = 'block';
+}
+
+function setPdfDownloadInProgress(inProgress) {
+  if (!exportPDFBtn) return;
+  exportPDFBtn.disabled = Boolean(inProgress);
+  exportPDFBtn.setAttribute('aria-busy', String(Boolean(inProgress)));
+  exportPDFBtn.textContent = inProgress ? 'Preparing PDF…' : pdfExportButtonDefaultLabel;
+}
 
 function runFormatApiErrorMessageRuntimeCheck() {
   if (!isDevMode || typeof runFormatApiErrorMessageRuntimeCheck._ran !== 'undefined') return;
@@ -573,6 +667,14 @@ function runFormatApiErrorMessageRuntimeCheck() {
 }
 
 runFormatApiErrorMessageRuntimeCheck();
+
+if (isDevMode && typeof window !== 'undefined') {
+  window.__pdfSelfTest = async () => {
+    const byteLength = await runPdfExportSelfCheck();
+    console.info('[pdf] self-test passed', { byteLength });
+    return byteLength;
+  };
+}
 
 function getSectionRows() {
   return [...sectionsEl.querySelectorAll('.section-row')];
@@ -1804,19 +1906,35 @@ pauseSATBBtn.onclick = () => pausePlayback('satb');
 stopSATBBtn.onclick = () => stopPlayback('satb');
 
 exportPDFBtn.onclick = async () => {
+  if (isDevMode) {
+    console.info('[pdf] download clicked', {
+      stage: activePdfExportScore()?.meta?.stage || null,
+      hasMelody: Boolean(melodyScore),
+      hasSatb: Boolean(satbScore),
+      version: getClientVersion(),
+    });
+  }
+
+  setExportPdfError('');
+  setPdfDownloadInProgress(true);
   const exportScore = activePdfExportScore();
   if (!exportScore) {
-    showErrors(['Generate a melody before exporting PDF.']);
+    const message = 'Generate a melody before exporting PDF.';
+    setExportPdfStatus('');
+    setExportPdfError(message);
+    showErrors([message]);
+    setPdfDownloadInProgress(false);
     return;
   }
 
+  let requestId = null;
   try {
     const stage = exportScore?.meta?.stage;
     if (stage !== 'melody' && stage !== 'satb') {
       throw new Error(`Cannot export PDF for unsupported stage: ${String(stage || 'unknown')}`);
     }
 
-    setExportPdfStatus('Requesting engraving pages…');
+    setExportPdfStatus('Preparing PDF…');
     const res = await post('/api/engrave/pages', {
       score: exportScore,
       stage,
@@ -1824,19 +1942,32 @@ exportPDFBtn.onclick = async () => {
       scale: 42,
     });
     const payload = await res.json();
+    requestId = getRequestIdFromHeaders(res.headers)
+      || (typeof payload?.request_id === 'string' ? payload.request_id : null)
+      || (typeof payload?.detail?.request_id === 'string' ? payload.detail.request_id : null)
+      || null;
     showComposerWarnings(payload.warnings || []);
-    await buildPdfFromSvgPages(payload.pages || [], exportScore);
+    const pages = normalizeEngravingPages(payload);
+    const { pdfBytes, filename, pageCount } = await buildPdfFromSvgPages(pages, exportScore);
+    triggerPdfDownload(pdfBytes, filename);
+
+    if (isDevMode) {
+      console.info('[pdf] download triggered', { filename, byteLength: pdfBytes.byteLength });
+    }
+
+    setExportPdfStatus(`PDF ready (${pageCount} page${pageCount === 1 ? '' : 's'}).`);
+    window.setTimeout(() => setExportPdfStatus(''), 2500);
   } catch (error) {
     setExportPdfStatus('');
-    const message = formatApiErrorMessage(error);
-    if (error?.response?.status === 422) {
-      showErrors([message]);
-    } else {
-      showErrors([`Unable to export PDF right now. ${message}`]);
-    }
+    const baseMessage = formatApiErrorMessage(error);
+    const includesRequestId = typeof baseMessage === 'string' && baseMessage.includes('request_id:');
+    const message = `Unable to export PDF right now. ${baseMessage}${!includesRequestId && requestId ? ` (request_id: ${requestId})` : ''}`;
+    setExportPdfError(message);
+    showErrors([message]);
+  } finally {
+    setPdfDownloadInProgress(false);
   }
 };
-
 
 exportMusicXMLBtn.onclick = async () => {
   if (!satbScore) {
