@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -25,6 +25,7 @@ from app.models import (
     EngravingPagesResponse,
     EngravingPreviewRequest,
     EngravingPreviewResponse,
+    SvgMeta,
     EndScoreResponse,
     HarmonizeRequest,
     MelodyResponse,
@@ -34,7 +35,7 @@ from app.models import (
 )
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score
 from app.services.musicxml_export import export_musicxml
-from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, preview_service
+from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, build_verovio_options, preview_service
 from app.services.pdf_deps import check_pdf_export_capabilities
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score, validate_score_diagnostics
@@ -133,6 +134,48 @@ def _extract_melody_from_satb(score):
         measure.voices["bass"] = [note.model_copy(update={"pitch": "REST", "is_rest": True}) for note in soprano_voice]
     return melody
 
+
+
+
+def _build_engraving_options(*, include_all_pages: bool, scale: int) -> EngravingOptions:
+    return EngravingOptions(
+        include_all_pages=include_all_pages,
+        layout=EngravingLayoutConfig(
+            page_width=DEFAULT_LAYOUT.page_width,
+            page_height=DEFAULT_LAYOUT.page_height,
+            scale=scale,
+            system_spacing=DEFAULT_LAYOUT.system_spacing,
+            staff_spacing=DEFAULT_LAYOUT.staff_spacing,
+            margin_top=DEFAULT_LAYOUT.margin_top,
+            margin_bottom=DEFAULT_LAYOUT.margin_bottom,
+            margin_left=DEFAULT_LAYOUT.margin_left,
+            margin_right=DEFAULT_LAYOUT.margin_right,
+        ),
+    )
+
+
+def _log_svg_meta_summary(endpoint: str, artifacts, options: EngravingOptions) -> None:
+    first_page_meta = artifacts[0].svg_meta if artifacts else {}
+    verovio_options = build_verovio_options(options.layout)
+    log_event(
+        logger,
+        "engrave_svg_meta_summary",
+        endpoint=endpoint,
+        page_count=len(artifacts),
+        first_page_meta={
+            "width": first_page_meta.get("width"),
+            "height": first_page_meta.get("height"),
+            "viewBox": first_page_meta.get("viewBox"),
+        },
+        first_page_hash_prefix=(artifacts[0].svg_hash[:8] if artifacts else ""),
+        verovio_options_summary={
+            "scale": verovio_options.get("scale"),
+            "pageWidth": verovio_options.get("pageWidth"),
+            "pageHeight": verovio_options.get("pageHeight"),
+            "spacingSystem": verovio_options.get("spacingSystem"),
+            "spacingStaff": verovio_options.get("spacingStaff"),
+        },
+    )
 
 def _handle_user_error(action: str, exc: ValueError) -> HTTPException:
     log_event(logger, "request_failed", level=logging.WARNING, action=action, reason=str(exc))
@@ -348,7 +391,7 @@ def export_musicxml_endpoint(payload: PDFExportRequest):
 
 
 @app.post("/api/engrave/preview", response_model=EngravingPreviewResponse)
-def engrave_preview_endpoint(payload: EngravingPreviewRequest):
+def engrave_preview_endpoint(payload: EngravingPreviewRequest, debug_svg_meta: bool = Query(default=False)):
     action = "Engraving preview"
     try:
         _require_score_stage(payload.score, payload.preview_mode, action)
@@ -356,20 +399,7 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
     except ValueError as exc:
         raise _handle_user_error(action, exc) from exc
 
-    options = EngravingOptions(
-        include_all_pages=payload.include_all_pages,
-        layout=EngravingLayoutConfig(
-            page_width=DEFAULT_LAYOUT.page_width,
-            page_height=DEFAULT_LAYOUT.page_height,
-            scale=payload.scale,
-            system_spacing=DEFAULT_LAYOUT.system_spacing,
-            staff_spacing=DEFAULT_LAYOUT.staff_spacing,
-            margin_top=DEFAULT_LAYOUT.margin_top,
-            margin_bottom=DEFAULT_LAYOUT.margin_bottom,
-            margin_left=DEFAULT_LAYOUT.margin_left,
-            margin_right=DEFAULT_LAYOUT.margin_right,
-        ),
-    )
+    options = _build_engraving_options(include_all_pages=payload.include_all_pages, scale=payload.scale)
     log_event(
         logger,
         "engraving_preview_started",
@@ -379,15 +409,20 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
     )
 
     try:
-        artifacts, cache_hit = preview_service.render_preview(normalize_score_for_rendering(payload.score), options)
+        artifacts, cache_hit = preview_service.engrave_score(normalize_score_for_rendering(payload.score), options)
     except RuntimeError as exc:
         log_event(logger, "engraving_preview_failed", level=logging.ERROR, reason=str(exc))
         raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
+
+    if debug_svg_meta:
+        _log_svg_meta_summary("preview", artifacts, options)
 
     response = EngravingPreviewResponse(
         preview_mode=payload.preview_mode,
         cache_hit=cache_hit,
         artifacts=[EngravingPreviewArtifact(page=item.page, svg=item.svg) for item in artifacts],
+        svg_meta=[SvgMeta.model_validate(item.svg_meta) for item in artifacts],
+        svg_hash=[item.svg_hash for item in artifacts],
         warnings=warnings,
     )
     log_event(logger, "engraving_preview_completed", preview_mode=payload.preview_mode, pages=len(response.artifacts), cache_hit=cache_hit)
@@ -395,7 +430,7 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
 
 
 @app.post("/api/engrave/pages", response_model=EngravingPagesResponse)
-def engrave_pages_endpoint(payload: EngravingPagesRequest):
+def engrave_pages_endpoint(payload: EngravingPagesRequest, debug_svg_meta: bool = Query(default=False)):
     action = "Engraving pages"
     try:
         _require_score_stage(payload.score, payload.stage, action)
@@ -403,20 +438,7 @@ def engrave_pages_endpoint(payload: EngravingPagesRequest):
     except ValueError as exc:
         raise _handle_user_error(action, exc) from exc
 
-    options = EngravingOptions(
-        include_all_pages=payload.include_all_pages,
-        layout=EngravingLayoutConfig(
-            page_width=DEFAULT_LAYOUT.page_width,
-            page_height=DEFAULT_LAYOUT.page_height,
-            scale=payload.scale,
-            system_spacing=DEFAULT_LAYOUT.system_spacing,
-            staff_spacing=DEFAULT_LAYOUT.staff_spacing,
-            margin_top=DEFAULT_LAYOUT.margin_top,
-            margin_bottom=DEFAULT_LAYOUT.margin_bottom,
-            margin_left=DEFAULT_LAYOUT.margin_left,
-            margin_right=DEFAULT_LAYOUT.margin_right,
-        ),
-    )
+    options = _build_engraving_options(include_all_pages=payload.include_all_pages, scale=payload.scale)
     log_event(
         logger,
         "engrave_pages_started",
@@ -426,15 +448,20 @@ def engrave_pages_endpoint(payload: EngravingPagesRequest):
     )
 
     try:
-        artifacts, cache_hit = preview_service.render_preview(normalize_score_for_rendering(payload.score), options)
+        artifacts, cache_hit = preview_service.engrave_score(normalize_score_for_rendering(payload.score), options)
     except RuntimeError as exc:
         log_event(logger, "engrave_pages_failed", level=logging.ERROR, reason=str(exc))
         raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
+
+    if debug_svg_meta:
+        _log_svg_meta_summary("pages", artifacts, options)
 
     response = EngravingPagesResponse(
         cache_hit=cache_hit,
         page_count=len(artifacts),
         pages=[EngravingPageArtifact(index=item.page, svg=item.svg) for item in artifacts],
+        svg_meta=[SvgMeta.model_validate(item.svg_meta) for item in artifacts],
+        svg_hash=[item.svg_hash for item in artifacts],
         warnings=warnings,
     )
     if warnings:

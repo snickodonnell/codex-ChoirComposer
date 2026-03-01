@@ -36,9 +36,9 @@ def test_preview_endpoint_returns_svg_artifacts_and_cache_flag(monkeypatch):
         def __init__(self):
             self.called = 0
 
-        def render_preview(self, score, options):
+        def engrave_score(self, score, options):
             self.called += 1
-            return ([engraving_preview.PreviewArtifact(page=1, svg="<svg><text>ok</text></svg>")], self.called > 1)
+            return ([engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>ok</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], self.called > 1)
 
     stub = StubService()
     monkeypatch.setattr("app.main.preview_service", stub)
@@ -58,16 +58,16 @@ def test_pages_endpoint_matches_preview_page_count_for_same_input(monkeypatch):
     satb = harmonize_score(_melody_score())
 
     class StubService:
-        def render_preview(self, score, options):
+        def engrave_score(self, score, options):
             if options.include_all_pages:
                 return (
                     [
-                        engraving_preview.PreviewArtifact(page=1, svg="<svg><text>page 1</text></svg>"),
-                        engraving_preview.PreviewArtifact(page=2, svg="<svg><text>page 2</text></svg>"),
+                        engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>page 1</text></svg>", svg_meta={"width": "100", "height": "200", "viewBox": "0 0 100 200", "first_tag_snippet": "<svg>"}, svg_hash="hash-1"),
+                        engraving_preview.EngravedPageArtifact(page=2, svg="<svg><text>page 2</text></svg>", svg_meta={"width": "120", "height": "220", "viewBox": "0 0 120 220", "first_tag_snippet": "<svg>"}, svg_hash="hash-2"),
                     ],
                     False,
                 )
-            return ([engraving_preview.PreviewArtifact(page=1, svg="<svg><text>page 1</text></svg>")], False)
+            return ([engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>page 1</text></svg>", svg_meta={"width": "100", "height": "200", "viewBox": "0 0 100 200", "first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False)
 
     monkeypatch.setattr("app.main.preview_service", StubService())
     preview_payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": True, "scale": 42}
@@ -86,8 +86,8 @@ def test_pages_endpoint_returns_svg_payload(monkeypatch):
     satb = harmonize_score(_melody_score())
 
     class StubService:
-        def render_preview(self, score, options):
-            return [engraving_preview.PreviewArtifact(page=1, svg="<svg><text>ok</text></svg>")], False
+        def engrave_score(self, score, options):
+            return [engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>ok</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False
 
     monkeypatch.setattr("app.main.preview_service", StubService())
     payload = {"score": satb.model_dump(), "stage": "satb", "include_all_pages": True, "scale": 42}
@@ -108,8 +108,8 @@ def test_preview_endpoint_accepts_pickup_enabled_score(monkeypatch):
     satb = harmonize_score(generate_melody_score(req))
 
     class StubService:
-        def render_preview(self, score, options):
-            return [engraving_preview.PreviewArtifact(page=1, svg="<svg><text>pickup</text></svg>")], False
+        def engrave_score(self, score, options):
+            return [engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>pickup</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False
 
     monkeypatch.setattr("app.main.preview_service", StubService())
     payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": False, "scale": 42}
@@ -122,8 +122,8 @@ def test_preview_endpoint_succeeds_with_warning_only_diagnostics(monkeypatch):
     satb = harmonize_score(_melody_score())
 
     class StubService:
-        def render_preview(self, score, options):
-            return [engraving_preview.PreviewArtifact(page=1, svg="<svg><text>warn</text></svg>")], False
+        def engrave_score(self, score, options):
+            return [engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>warn</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False
 
     monkeypatch.setattr("app.main.preview_service", StubService())
 
@@ -212,3 +212,59 @@ def test_build_toolkit_clamps_system_spacing_to_verovio_bounds(monkeypatch):
     service.build_toolkit("<score-partwise/>", options)
 
     assert 0 <= captured["options"]["spacingSystem"] <= 100
+
+
+def test_extract_svg_meta_reads_root_attributes():
+    svg = '<svg width="2100" height="2970" viewBox="0 0 2100 2970" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" version="1.1"><g/></svg>'
+
+    meta = engraving_preview.extract_svg_meta(svg)
+
+    assert meta["width"] == "2100"
+    assert meta["height"] == "2970"
+    assert meta["viewBox"] == "0 0 2100 2970"
+    assert meta["preserveAspectRatio"] == "xMidYMid meet"
+    assert meta["xmlns"] == "http://www.w3.org/2000/svg"
+    assert meta["version"] == "1.1"
+    assert meta["first_tag_snippet"].startswith("<svg")
+
+
+def test_preview_and_pages_svg_payloads_are_identical(monkeypatch):
+    satb = harmonize_score(_melody_score())
+
+    class StubService:
+        def engrave_score(self, score, options):
+            svg_1 = '<svg width="100" height="200" viewBox="0 0 100 200"><text>page 1</text></svg>'
+            svg_2 = '<svg width="120" height="220" viewBox="0 0 120 220"><text>page 2</text></svg>'
+            return [
+                engraving_preview.EngravedPageArtifact(
+                    page=1,
+                    svg=svg_1,
+                    svg_meta=engraving_preview.extract_svg_meta(svg_1),
+                    svg_hash=engraving_preview.hash_svg(svg_1),
+                ),
+                engraving_preview.EngravedPageArtifact(
+                    page=2,
+                    svg=svg_2,
+                    svg_meta=engraving_preview.extract_svg_meta(svg_2),
+                    svg_hash=engraving_preview.hash_svg(svg_2),
+                ),
+            ], False
+
+    monkeypatch.setattr("app.main.preview_service", StubService())
+    preview_payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": True, "scale": 42}
+    pages_payload = {"score": satb.model_dump(), "stage": "satb", "include_all_pages": True, "scale": 42}
+
+    preview_response = client.post("/api/engrave/preview", json=preview_payload)
+    pages_response = client.post("/api/engrave/pages", json=pages_payload)
+
+    preview_json = preview_response.json()
+    pages_json = pages_response.json()
+
+    assert preview_response.status_code == 200
+    assert pages_response.status_code == 200
+    assert len(preview_json["artifacts"]) == pages_json["page_count"]
+    assert preview_json["svg_hash"] == pages_json["svg_hash"]
+    for preview_meta, pages_meta in zip(preview_json["svg_meta"], pages_json["svg_meta"], strict=True):
+        assert preview_meta.get("width") == pages_meta.get("width")
+        assert preview_meta.get("height") == pages_meta.get("height")
+        assert preview_meta.get("viewBox") == pages_meta.get("viewBox")

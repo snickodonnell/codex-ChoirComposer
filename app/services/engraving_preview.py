@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from threading import Lock
+from typing import Any
 
 from app.logging_utils import log_event
 from app.models import CanonicalScore
@@ -17,6 +19,14 @@ logger = logging.getLogger(__name__)
 class PreviewArtifact:
     page: int
     svg: str
+
+
+@dataclass(frozen=True)
+class EngravedPageArtifact:
+    page: int
+    svg: str
+    svg_meta: dict[str, str]
+    svg_hash: str
 
 
 @dataclass(frozen=True)
@@ -46,12 +56,66 @@ class EngravingOptions:
     layout: EngravingLayoutConfig = DEFAULT_LAYOUT
 
 
+def build_verovio_options(layout: EngravingLayoutConfig) -> dict[str, Any]:
+    return {
+        "scale": layout.scale,
+        "pageWidth": layout.page_width,
+        "pageHeight": layout.page_height,
+        "adjustPageHeight": True,
+        "breaks": "auto",
+        "spacingSystem": _clamp_system_spacing(layout.system_spacing),
+        "spacingStaff": layout.staff_spacing,
+        "spacingLinear": 0.3,
+        "justifyVertically": True,
+        "systemMaxPerPage": 0,
+        "pageMarginTop": layout.margin_top,
+        "pageMarginBottom": layout.margin_bottom,
+        "pageMarginLeft": layout.margin_left,
+        "pageMarginRight": layout.margin_right,
+        "mnumInterval": 1,
+        "condense": "none",
+        "footer": "none",
+        "header": "none",
+        "svgViewBox": True,
+    }
+
+
+def extract_svg_meta(svg: str) -> dict[str, str]:
+    match = re.search(r"<svg\b[^>]*>", svg, flags=re.IGNORECASE)
+    if not match:
+        return {"first_tag_snippet": ""}
+
+    first_tag = match.group(0)
+    compact_first_tag = " ".join(first_tag.split())
+    first_tag_snippet = compact_first_tag[:300]
+    if len(compact_first_tag) > 300:
+        first_tag_snippet += "..."
+
+    attrs: dict[str, str] = {"first_tag_snippet": first_tag_snippet}
+    for key, raw in re.findall(r"([:\w-]+)\s*=\s*([\"'][^\"']*[\"'])", first_tag):
+        attrs[key] = raw[1:-1]
+
+    extracted: dict[str, str] = {"first_tag_snippet": first_tag_snippet}
+    for key in ("width", "height", "viewBox", "preserveAspectRatio", "xmlns", "xmlns:xlink", "version"):
+        if key in attrs:
+            extracted[key] = attrs[key]
+    return extracted
+
+
+def hash_svg(svg: str) -> str:
+    return hashlib.sha256(svg.encode("utf-8")).hexdigest()
+
+
 class EngravingPreviewService:
     def __init__(self):
-        self._cache: dict[str, list[PreviewArtifact]] = {}
+        self._cache: dict[str, list[EngravedPageArtifact]] = {}
         self._cache_lock = Lock()
 
     def render_preview(self, score: CanonicalScore, options: EngravingOptions) -> tuple[list[PreviewArtifact], bool]:
+        pages, cache_hit = self.engrave_score(score, options)
+        return [PreviewArtifact(page=item.page, svg=item.svg) for item in pages], cache_hit
+
+    def engrave_score(self, score: CanonicalScore, options: EngravingOptions) -> tuple[list[EngravedPageArtifact], bool]:
         cache_key = self._cache_key(score, options)
         with self._cache_lock:
             cached = self._cache.get(cache_key)
@@ -60,7 +124,7 @@ class EngravingPreviewService:
             return cached, True
 
         musicxml = self.build_musicxml(score)
-        artifacts = self.render_svg_pages(musicxml, options)
+        artifacts = self.engrave_to_svg_pages(musicxml, options)
         with self._cache_lock:
             self._cache[cache_key] = artifacts
         log_event(logger, "engraving_preview_cache_store", cache_key=cache_key, pages=len(artifacts))
@@ -97,40 +161,20 @@ class EngravingPreviewService:
             raise RuntimeError("Verovio is required for server-side preview rendering.") from exc
 
         toolkit = verovio.toolkit()
-        toolkit.setOptions({
-            "scale": options.layout.scale,
-            "pageWidth": options.layout.page_width,
-            "pageHeight": options.layout.page_height,
-            "adjustPageHeight": True,
-            "breaks": "auto",
-            "spacingSystem": _clamp_system_spacing(options.layout.system_spacing),
-            "spacingStaff": options.layout.staff_spacing,
-            "spacingLinear": 0.3,
-            "justifyVertically": True,
-            "systemMaxPerPage": 0,
-            "pageMarginTop": options.layout.margin_top,
-            "pageMarginBottom": options.layout.margin_bottom,
-            "pageMarginLeft": options.layout.margin_left,
-            "pageMarginRight": options.layout.margin_right,
-            "mnumInterval": 1,
-            "condense": "none",
-            "footer": "none",
-            "header": "none",
-            "svgViewBox": True,
-        })
+        toolkit.setOptions(build_verovio_options(options.layout))
         toolkit.loadData(musicxml)
         return toolkit
 
-    def render_svg_pages(self, musicxml: str, options: EngravingOptions) -> list[PreviewArtifact]:
+    def engrave_to_svg_pages(self, musicxml: str, options: EngravingOptions) -> list[EngravedPageArtifact]:
         toolkit = self.build_toolkit(musicxml, options)
 
         page_count = max(1, int(toolkit.getPageCount()))
         final_page_count = page_count if options.include_all_pages else 1
 
-        artifacts: list[PreviewArtifact] = []
+        artifacts: list[EngravedPageArtifact] = []
         for page in range(1, final_page_count + 1):
             svg = _render_svg_page(toolkit, page)
-            artifacts.append(PreviewArtifact(page=page, svg=svg))
+            artifacts.append(EngravedPageArtifact(page=page, svg=svg, svg_meta=extract_svg_meta(svg), svg_hash=hash_svg(svg)))
 
         log_event(logger, "engraving_preview_rendered", pages=len(artifacts), total_pages=page_count)
         return artifacts
