@@ -54,6 +54,51 @@ def test_preview_endpoint_returns_svg_artifacts_and_cache_flag(monkeypatch):
     assert first.json()["artifacts"][0]["svg"].startswith("<svg")
 
 
+def test_pages_endpoint_matches_preview_page_count_for_same_input(monkeypatch):
+    satb = harmonize_score(_melody_score())
+
+    class StubService:
+        def render_preview(self, score, options):
+            if options.include_all_pages:
+                return (
+                    [
+                        engraving_preview.PreviewArtifact(page=1, svg="<svg><text>page 1</text></svg>"),
+                        engraving_preview.PreviewArtifact(page=2, svg="<svg><text>page 2</text></svg>"),
+                    ],
+                    False,
+                )
+            return ([engraving_preview.PreviewArtifact(page=1, svg="<svg><text>page 1</text></svg>")], False)
+
+    monkeypatch.setattr("app.main.preview_service", StubService())
+    preview_payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": True, "scale": 42}
+    pages_payload = {"score": satb.model_dump(), "stage": "satb", "include_all_pages": True, "scale": 42}
+
+    preview_response = client.post("/api/engrave/preview", json=preview_payload)
+    pages_response = client.post("/api/engrave/pages", json=pages_payload)
+
+    assert preview_response.status_code == 200
+    assert pages_response.status_code == 200
+    assert pages_response.json()["page_count"] == len(preview_response.json()["artifacts"])
+    assert pages_response.json()["page_count"] == len(pages_response.json()["pages"])
+
+
+def test_pages_endpoint_returns_svg_payload(monkeypatch):
+    satb = harmonize_score(_melody_score())
+
+    class StubService:
+        def render_preview(self, score, options):
+            return [engraving_preview.PreviewArtifact(page=1, svg="<svg><text>ok</text></svg>")], False
+
+    monkeypatch.setattr("app.main.preview_service", StubService())
+    payload = {"score": satb.model_dump(), "stage": "satb", "include_all_pages": True, "scale": 42}
+
+    response = client.post("/api/engrave/pages", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["pages"]
+    assert any("<svg" in page["svg"] for page in response.json()["pages"])
+
+
 def test_preview_endpoint_accepts_pickup_enabled_score(monkeypatch):
     req = CompositionRequest(
         sections=[LyricSection(id="verse-1", label="verse", text="glory forever rising now")],

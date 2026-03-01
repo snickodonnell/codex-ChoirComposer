@@ -270,6 +270,25 @@ class EngravingPreviewResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class EngravingPagesRequest(BaseModel):
+    score: CanonicalScore
+    stage: Literal["melody", "satb"]
+    include_all_pages: bool = True
+    scale: int = Field(default=42, ge=20, le=90)
+
+
+class EngravingPageArtifact(BaseModel):
+    index: int = Field(ge=1)
+    svg: str = Field(min_length=1)
+
+
+class EngravingPagesResponse(BaseModel):
+    cache_hit: bool
+    page_count: int = Field(ge=1)
+    pages: list[EngravingPageArtifact]
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ClientLogEvent(BaseModel):
     ts: str
     event: str = Field(min_length=1, max_length=120)
