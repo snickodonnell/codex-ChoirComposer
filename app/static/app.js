@@ -454,6 +454,107 @@ let canvgModulePromise = null;
 let hasLoggedCanvgDiagnostics = false;
 let vectorPdfModulePromise = null;
 let hasLoggedVectorPdfDiagnostics = false;
+const pdfTempoFontBinaryCache = new Map();
+
+function normalizeFontFamilyName(fontFamily) {
+  return String(fontFamily || '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+}
+
+
+function detectTempoGlyphUsage(svgEl, pageNumber) {
+  const textNodes = Array.from(svgEl.querySelectorAll('text'));
+  const tempoTextNodes = textNodes.filter((node) => (node.textContent || '').includes('='));
+  const tempoRootNode = tempoTextNodes[0] || null;
+  const tempoTextContent = (tempoRootNode?.textContent || '').trim();
+  const tempoCodepoints = Array.from(tempoTextContent)
+    .slice(0, 10)
+    .map((char) => `U+${char.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+
+  const nearTempoTextNodes = tempoRootNode
+    ? Array.from(tempoRootNode.querySelectorAll('tspan'))
+    : [];
+  const fontFamiliesNearTempo = new Set();
+  nearTempoTextNodes.forEach((node) => {
+    const family = node.getAttribute('font-family');
+    if (family && family.trim()) {
+      fontFamiliesNearTempo.add(family.trim());
+    }
+  });
+  if (tempoRootNode?.getAttribute('font-family')) {
+    fontFamiliesNearTempo.add(tempoRootNode.getAttribute('font-family').trim());
+  }
+
+  const hasTempoText = Boolean(tempoRootNode);
+  const hasTempoPath = Boolean(tempoRootNode?.querySelector('path'));
+  const hasTempoUse = Boolean(tempoRootNode?.querySelector('use'));
+
+  if (isDevMode) {
+    console.info('[pdf] tempo glyph detection', {
+      pageNumber,
+      tempoRepresentation: hasTempoText ? 'text' : (hasTempoPath ? 'path' : (hasTempoUse ? 'use' : 'unknown')),
+      fontFamiliesNearTempo: Array.from(fontFamiliesNearTempo),
+      tempoCodepoints,
+      tempoTextPreview: tempoTextContent.slice(0, 10),
+    });
+
+    const nearbyNodes = tempoRootNode
+      ? [tempoRootNode, ...nearTempoTextNodes]
+      : [];
+    const nearTempoDebug = nearbyNodes.map((node) => ({
+      nodeName: node.nodeName,
+      fontFamily: node.getAttribute('font-family') || 'inherit',
+      text: (node.textContent || '').trim().slice(0, 20),
+      containsEquals: (node.textContent || '').includes('='),
+    }));
+    console.info('[pdf] tempo text neighborhood', { pageNumber, nodes: nearTempoDebug });
+  }
+
+  const puaRegex = /[\uE000-\uF8FF]/;
+  const unexpectedStaffGlyphText = textNodes.some((node) => {
+    if (!puaRegex.test(node.textContent || '')) return false;
+    if (tempoRootNode && (node === tempoRootNode || tempoRootNode.contains(node))) return false;
+    return true;
+  });
+
+  if (isDevMode && unexpectedStaffGlyphText) {
+    console.warn('[pdf] unexpected non-tempo PUA <text> glyphs detected in SVG; preserving default svg2pdf behavior for staff notation.');
+  }
+
+  return {
+    tempoRootNode,
+    hasTempoText,
+    hasTempoPath,
+    hasTempoUse,
+    tempoFontFamilies: Array.from(fontFamiliesNearTempo),
+    unexpectedStaffGlyphText,
+  };
+}
+
+async function ensureTempoFontRegistered(doc, svgFontFamily) {
+  const normalizedFamily = normalizeFontFamilyName(svgFontFamily);
+  if (!normalizedFamily || normalizedFamily !== 'leipzig') {
+    return null;
+  }
+
+  let cacheEntry = pdfTempoFontBinaryCache.get(normalizedFamily);
+  if (!cacheEntry) {
+    const fontModule = await import('/static/vendor/fonts/leipzig.ttf.base64.js');
+    const base64 = String(fontModule?.LEIPZIG_TTF_BASE64 || '').trim();
+    if (!base64) {
+      throw new Error('Could not load tempo glyph font Leipzig base64 payload.');
+    }
+    cacheEntry = {
+      vfsFileName: 'Leipzig.ttf',
+      pdfFontName: 'Leipzig',
+      base64,
+    };
+    pdfTempoFontBinaryCache.set(normalizedFamily, cacheEntry);
+  }
+
+  doc.addFileToVFS(cacheEntry.vfsFileName, cacheEntry.base64);
+  doc.addFont(cacheEntry.vfsFileName, cacheEntry.pdfFontName, 'normal');
+  return cacheEntry;
+}
 
 function shortenErrorMessage(errorMessage, maxLength = 180) {
   const normalized = String(errorMessage || '').replace(/\s+/g, ' ').trim();
@@ -660,7 +761,37 @@ async function buildPdfFromSvgPages(pages, score) {
 
     setExportPdfStatus(`Building PDF page ${pageNumber} of ${pages.length}…`);
     try {
-      await svg2pdf(svgEl, doc, { x: 0, y: 0, width, height });
+      const tempoGlyph = detectTempoGlyphUsage(svgEl, pageNumber);
+      let tempoFontEntry = null;
+      if (tempoGlyph.unexpectedStaffGlyphText) {
+        if (isDevMode) {
+          console.warn('[pdf] skipping tempo font mapping due to unexpected non-tempo staff glyph text usage.');
+        }
+      } else if (tempoGlyph.hasTempoText) {
+        const tempoFontFamily = tempoGlyph.tempoFontFamilies.find((family) => normalizeFontFamilyName(family) === 'leipzig')
+          || tempoGlyph.tempoFontFamilies[0]
+          || null;
+        if (tempoFontFamily) {
+          tempoFontEntry = await ensureTempoFontRegistered(doc, tempoFontFamily);
+        }
+      }
+
+      const fontCallback = tempoFontEntry
+        ? (requestedFontFamily) => {
+          if (normalizeFontFamilyName(requestedFontFamily) === 'leipzig') {
+            return tempoFontEntry.pdfFontName;
+          }
+          return null;
+        }
+        : undefined;
+
+      await svg2pdf(svgEl, doc, {
+        x: 0,
+        y: 0,
+        width,
+        height,
+        ...(fontCallback ? { fontCallback } : {}),
+      });
     } catch (vectorError) {
       if (isDevMode) {
         console.error('[pdf] page render failed', {
