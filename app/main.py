@@ -20,6 +20,9 @@ from app.models import (
     ClientLogEvent,
     CompositionRequest,
     EngravingPreviewArtifact,
+    EngravingPageArtifact,
+    EngravingPagesRequest,
+    EngravingPagesResponse,
     EngravingPreviewRequest,
     EngravingPreviewResponse,
     EndScoreResponse,
@@ -388,4 +391,59 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest):
         warnings=warnings,
     )
     log_event(logger, "engraving_preview_completed", preview_mode=payload.preview_mode, pages=len(response.artifacts), cache_hit=cache_hit)
+    return response
+
+
+@app.post("/api/engrave/pages", response_model=EngravingPagesResponse)
+def engrave_pages_endpoint(payload: EngravingPagesRequest):
+    action = "Engraving pages"
+    try:
+        _require_score_stage(payload.score, payload.stage, action)
+        warnings = _require_valid_score(payload.score, action)
+    except ValueError as exc:
+        raise _handle_user_error(action, exc) from exc
+
+    options = EngravingOptions(
+        include_all_pages=payload.include_all_pages,
+        layout=EngravingLayoutConfig(
+            page_width=DEFAULT_LAYOUT.page_width,
+            page_height=DEFAULT_LAYOUT.page_height,
+            scale=payload.scale,
+            system_spacing=DEFAULT_LAYOUT.system_spacing,
+            staff_spacing=DEFAULT_LAYOUT.staff_spacing,
+            margin_top=DEFAULT_LAYOUT.margin_top,
+            margin_bottom=DEFAULT_LAYOUT.margin_bottom,
+            margin_left=DEFAULT_LAYOUT.margin_left,
+            margin_right=DEFAULT_LAYOUT.margin_right,
+        ),
+    )
+    log_event(
+        logger,
+        "engrave_pages_started",
+        stage=payload.stage,
+        include_all_pages=payload.include_all_pages,
+        scale=payload.scale,
+    )
+
+    try:
+        artifacts, cache_hit = preview_service.render_preview(normalize_score_for_rendering(payload.score), options)
+    except RuntimeError as exc:
+        log_event(logger, "engrave_pages_failed", level=logging.ERROR, reason=str(exc))
+        raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
+
+    response = EngravingPagesResponse(
+        cache_hit=cache_hit,
+        page_count=len(artifacts),
+        pages=[EngravingPageArtifact(index=item.page, svg=item.svg) for item in artifacts],
+        warnings=warnings,
+    )
+    if warnings:
+        log_event(logger, "engrave_pages_warnings", level=logging.WARNING, warning_count=len(warnings), diagnostics=warnings)
+    log_event(
+        logger,
+        "engrave_pages_completed",
+        stage=payload.stage,
+        page_count=response.page_count,
+        cache_hit=cache_hit,
+    )
     return response
