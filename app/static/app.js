@@ -84,6 +84,7 @@ function emitPlaybackLog(event, fields = {}) {
 class MusicPlaybackEngine {
   constructor() {
     this.session = null;
+    this.hasWarnedDisposedEvent = false;
   }
 
   _syncGlobalState() {
@@ -96,10 +97,33 @@ class MusicPlaybackEngine {
     } : null;
   }
 
-  _disposeSynth() {
-    if (!this.session?.synth) return;
-    this.session.synth.dispose();
-    this.session.synth = null;
+  _warnDisposedScheduleOnce(context = {}) {
+    if (this.hasWarnedDisposedEvent || !isDevMode) return;
+    this.hasWarnedDisposedEvent = true;
+    console.warn('[playback] ignored scheduled event because playback engine is inactive/disposed', context);
+  }
+
+  _disposeSynth(session = this.session) {
+    if (!session?.synth) return;
+    try {
+      if (typeof session.synth.releaseAll === 'function') {
+        session.synth.releaseAll();
+      }
+      session.synth.dispose();
+    } catch (error) {
+      this._warnDisposedScheduleOnce({ phase: 'dispose', message: String(error?.message || error) });
+    }
+    session.synth = null;
+    session.isDisposed = true;
+  }
+
+  _stopAndCancelTransport() {
+    try {
+      Tone.Transport.stop();
+      Tone.Transport.cancel(0);
+    } catch (error) {
+      this._warnDisposedScheduleOnce({ phase: 'transport-cancel', message: String(error?.message || error) });
+    }
   }
 
   _clearFinishTimer() {
@@ -109,8 +133,10 @@ class MusicPlaybackEngine {
   }
 
   _scheduleFromOffset(playback, offsetSeconds) {
+    this._stopAndCancelTransport();
     const now = Tone.now();
     const synth = playback.poly ? new Tone.PolySynth(Tone.Synth).toDestination() : new Tone.Synth().toDestination();
+    const scheduledEventIds = [];
 
     playback.events.forEach((event) => {
       const eventEnd = event.time + event.seconds;
@@ -118,11 +144,29 @@ class MusicPlaybackEngine {
       const secondsIntoEvent = Math.max(0, offsetSeconds - event.time);
       const startDelay = Math.max(0, event.time - offsetSeconds);
       const duration = Math.max(0.02, event.seconds - secondsIntoEvent);
-      if (playback.poly) {
-        synth.triggerAttackRelease(event.pitches, duration, now + startDelay);
-        return;
-      }
-      synth.triggerAttackRelease(event.pitches[0], duration, now + startDelay);
+      const eventId = Tone.Transport.schedule((time) => {
+        const activeSession = this.session;
+        if (!activeSession || activeSession.id !== playback.id || !activeSession.isActive || activeSession.isDisposed || !activeSession.synth) {
+          this._warnDisposedScheduleOnce({ phase: 'scheduled-event', playbackId: playback.id });
+          return;
+        }
+
+        const pitches = Array.isArray(event.pitches) ? event.pitches.filter(Boolean) : [];
+        if (!pitches.length) return;
+
+        try {
+          if (activeSession.poly) {
+            activeSession.synth.triggerAttackRelease(pitches, duration, time);
+            return;
+          }
+          const [firstPitch] = pitches;
+          if (!firstPitch) return;
+          activeSession.synth.triggerAttackRelease(firstPitch, duration, time);
+        } catch (error) {
+          this._warnDisposedScheduleOnce({ phase: 'trigger', message: String(error?.message || error) });
+        }
+      }, startDelay);
+      scheduledEventIds.push(eventId);
     });
 
     const remainingMs = Math.max(0, (playback.totalSeconds - offsetSeconds + 0.05) * 1000);
@@ -136,13 +180,25 @@ class MusicPlaybackEngine {
       startedAt: now,
       state: 'playing',
       synth,
+      isActive: true,
+      isDisposed: false,
+      scheduledEventIds,
       finishTimer: window.setTimeout(() => {
         if (this.session?.id === playback.id) {
           this.stop(playback.type, 'completed');
         }
       }, remainingMs),
     };
+    Tone.Transport.start();
     this._syncGlobalState();
+  }
+
+  stopAndDisposePlaybackEngine() {
+    if (!this.session) return;
+    this.session.isActive = false;
+    this._stopAndCancelTransport();
+    this._clearFinishTimer();
+    this._disposeSynth(this.session);
   }
 
   async start(playback) {
@@ -164,8 +220,7 @@ class MusicPlaybackEngine {
 
     if (this.session?.id === playback.id && this.session.state === 'paused') {
       const resumeAt = this.session.offsetSeconds;
-      this._disposeSynth();
-      this._clearFinishTimer();
+      this.stopAndDisposePlaybackEngine();
       this._scheduleFromOffset(playback, resumeAt);
       emitPlaybackLog('playback_resumed', { type: playback.type, id: playback.id, offsetSeconds: Number(resumeAt.toFixed(3)) });
       return;
@@ -186,8 +241,7 @@ class MusicPlaybackEngine {
     const elapsed = this.session.offsetSeconds + (Tone.now() - this.session.startedAt);
     this.session.offsetSeconds = Math.min(elapsed, this.session.totalSeconds);
     this.session.state = 'paused';
-    this._disposeSynth();
-    this._clearFinishTimer();
+    this.stopAndDisposePlaybackEngine();
     this._syncGlobalState();
     emitPlaybackLog('playback_paused', {
       type,
@@ -199,8 +253,7 @@ class MusicPlaybackEngine {
   stop(type, reason = 'user_stop') {
     if (!this.session || this.session.type !== type) return;
     const { id, offsetSeconds, totalSeconds } = this.session;
-    this._disposeSynth();
-    this._clearFinishTimer();
+    this.stopAndDisposePlaybackEngine();
     this.session = null;
     this._syncGlobalState();
     emitPlaybackLog('playback_stopped', {
@@ -1968,6 +2021,7 @@ pauseSATBBtn.onclick = () => pausePlayback('satb');
 stopSATBBtn.onclick = () => stopPlayback('satb');
 
 exportPDFBtn.onclick = async () => {
+  const playbackStateBeforeExport = activePlayback ? { ...activePlayback } : null;
   if (isDevMode) {
     console.info('[pdf] download clicked', {
       stage: activePdfExportScore()?.meta?.stage || null,
@@ -2021,15 +2075,25 @@ exportPDFBtn.onclick = async () => {
     window.setTimeout(() => setExportPdfStatus(''), 2500);
   } catch (error) {
     setExportPdfStatus('');
-    const baseMessage = formatApiErrorMessage(error);
-    const includesRequestId = typeof baseMessage === 'string' && baseMessage.includes('request_id:');
-    const message = `Unable to export PDF right now. ${baseMessage}${!includesRequestId && requestId ? ` (request_id: ${requestId})` : ''}`;
+    const baseMessage = formatApiErrorMessage(error) || 'Unexpected export failure.';
+    const requestSuffix = requestId ? ` (request_id: ${requestId})` : '';
+    const devSuffix = isDevMode ? ` (dev: ${String(error?.message || error)})` : '';
+    const message = `Unable to export PDF right now. ${baseMessage}${requestSuffix}${devSuffix}`;
     if (isDevMode) {
       console.error('[pdf] export failed', { error, message, requestId });
     }
     setExportPdfError(message);
     showErrors([message]);
   } finally {
+    if (isDevMode) {
+      const playbackStateAfterExport = activePlayback ? { ...activePlayback } : null;
+      if (JSON.stringify(playbackStateBeforeExport) !== JSON.stringify(playbackStateAfterExport)) {
+        console.warn('[pdf] export changed playback state unexpectedly', {
+          before: playbackStateBeforeExport,
+          after: playbackStateAfterExport,
+        });
+      }
+    }
     setPdfDownloadInProgress(false);
   }
 };
