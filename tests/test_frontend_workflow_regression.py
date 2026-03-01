@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import subprocess
 import time
@@ -270,6 +271,64 @@ def test_satb_playback_remains_available_after_multiple_generations():
                     timeout=20000,
                 )
                 assert page.locator("#startSATB").is_disabled() is False
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+def test_regenerate_melody_renders_warning_banner_when_endpoint_returns_warnings():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                page.click("#generateMelody")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                      return meta.trim().length > 0;
+                    }
+                    """,
+                    timeout=20000,
+                )
+
+                warning_text = "Regeneration warning parity check"
+
+                def _regenerate_route(route):
+                    req = route.request
+                    payload = req.post_data_json
+                    score = payload["score"]
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "score": score,
+                                "warnings": [warning_text],
+                                "seed_strategy_used": "random",
+                                "seed_used": "test-seed",
+                            }
+                        ),
+                    )
+
+                page.route("**/api/regenerate-melody", _regenerate_route)
+                page.click("#regenerate")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const el = document.querySelector('#composerWarnings');
+                      return !!el && el.style.display !== 'none' && el.textContent.includes('Regeneration warning parity check');
+                    }
+                    """,
+                    timeout=20000,
+                )
+
+                assert page.locator("#composerWarnings").text_content().find(warning_text) != -1
                 browser.close()
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")

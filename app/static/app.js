@@ -379,6 +379,45 @@ function showComposerWarnings(warnings = []) {
   composerWarningsEl.style.display = 'block';
 }
 
+function normalizeWarningsList(value) {
+  if (!Array.isArray(value)) return null;
+  return value.filter((item) => typeof item === 'string' && item.trim());
+}
+
+async function resolveDraftWarnings(endpoint, score, responsePayload) {
+  const responseWarnings = normalizeWarningsList(responsePayload?.warnings);
+  const hasResponseWarningsField = Array.isArray(responsePayload?.warnings);
+  if (isDevMode) {
+    console.info('[composer-warnings]', {
+      endpoint,
+      hasWarningsField: hasResponseWarningsField,
+      warningsCount: responseWarnings?.length ?? null,
+    });
+  }
+  if (responseWarnings !== null) {
+    return responseWarnings;
+  }
+
+  const validateRes = await post('/api/validate-score', { score });
+  const validatePayload = await validateRes.json();
+  const validationWarnings = normalizeWarningsList(validatePayload?.warnings) || [];
+  if (isDevMode) {
+    console.info('[composer-warnings]', {
+      endpoint: '/api/validate-score',
+      sourceEndpoint: endpoint,
+      hasWarningsField: Array.isArray(validatePayload?.warnings),
+      warningsCount: validationWarnings.length,
+    });
+  }
+  return validationWarnings;
+}
+
+async function applyDraftResult({ endpoint, responsePayload, score, applyDraft }) {
+  const warnings = await resolveDraftWarnings(endpoint, score, responsePayload);
+  applyDraft();
+  showComposerWarnings(warnings);
+}
+
 function parseWarningsHeader(headerValue) {
   if (!headerValue) return [];
   try {
@@ -1439,10 +1478,16 @@ async function regenerateActiveMelody() {
   const melodyPayload = await res.json();
   logSeedMetadata(melodyPayload, 'regenerate-melody');
   const score = melodyPayload.score;
-  showComposerWarnings(melodyPayload.warnings || []);
-  appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
-  resetSatbStage();
-  updateActionAvailability();
+  await applyDraftResult({
+    endpoint: '/api/regenerate-melody',
+    responsePayload: melodyPayload,
+    score,
+    applyDraft: () => {
+      appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
+      resetSatbStage();
+      updateActionAvailability();
+    },
+  });
 }
 
 async function regenerateActiveSatb() {
@@ -1459,12 +1504,19 @@ async function regenerateActiveSatb() {
 
   const res = await post('/api/regenerate-satb', payload);
   const responsePayload = await res.json();
-  appendSatbDraftVersion(
-    responsePayload.score,
-    responsePayload.harmonization_notes,
-    'SATB (regenerated)',
-  );
-  updateActionAvailability();
+  await applyDraftResult({
+    endpoint: '/api/regenerate-satb',
+    responsePayload,
+    score: responsePayload.score,
+    applyDraft: () => {
+      appendSatbDraftVersion(
+        responsePayload.score,
+        responsePayload.harmonization_notes,
+        'SATB (regenerated)',
+      );
+      updateActionAvailability();
+    },
+  });
 }
 
 function appendDraftVersion(score, sectionClusterMap, label) {
@@ -2275,13 +2327,19 @@ generateMelodyBtn.onclick = async () => {
   const melodyPayload = await res.json();
   logSeedMetadata(melodyPayload, 'generate-melody');
   const score = melodyPayload.score;
-  showComposerWarnings(melodyPayload.warnings || []);
   const sectionClusterMap = buildSectionClusterMap(payload);
-  melodyDraftVersions = [];
-  activeDraftVersionId = null;
-  appendDraftVersion(score, sectionClusterMap, 'Melody');
-  resetSatbStage({ clearHistory: true });
-  updateActionAvailability();
+  await applyDraftResult({
+    endpoint: '/api/generate-melody',
+    responsePayload: melodyPayload,
+    score,
+    applyDraft: () => {
+      melodyDraftVersions = [];
+      activeDraftVersionId = null;
+      appendDraftVersion(score, sectionClusterMap, 'Melody');
+      resetSatbStage({ clearHistory: true });
+      updateActionAvailability();
+    },
+  });
 };
 
 regenerateBtn.onclick = async () => regenerateActiveMelody();
@@ -2347,8 +2405,15 @@ generateSATBBtn.onclick = async () => {
   }
   const res = await post('/api/generate-satb', { score: melodyScore });
   const payload = await res.json();
-  appendSatbDraftVersion(payload.score, payload.harmonization_notes, 'SATB');
-  updateActionAvailability();
+  await applyDraftResult({
+    endpoint: '/api/generate-satb',
+    responsePayload: payload,
+    score: payload.score,
+    applyDraft: () => {
+      appendSatbDraftVersion(payload.score, payload.harmonization_notes, 'SATB');
+      updateActionAvailability();
+    },
+  });
 };
 
 regenerateSatbBtn.onclick = async () => regenerateActiveSatb();
