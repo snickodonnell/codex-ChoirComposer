@@ -437,7 +437,7 @@ function parseSvgDimensions(svgText) {
 
   const width = parseNumeric(svgEl.getAttribute('width')) || viewBoxWidth || 816;
   const height = parseNumeric(svgEl.getAttribute('height')) || viewBoxHeight || 1056;
-  return { width, height };
+  return { width, height, svgEl };
 }
 
 function delayToKeepUiResponsive() {
@@ -452,6 +452,8 @@ function delayToKeepUiResponsive() {
 
 let canvgModulePromise = null;
 let hasLoggedCanvgDiagnostics = false;
+let vectorPdfModulePromise = null;
+let hasLoggedVectorPdfDiagnostics = false;
 
 function shortenErrorMessage(errorMessage, maxLength = 180) {
   const normalized = String(errorMessage || '').replace(/\s+/g, ' ').trim();
@@ -485,6 +487,37 @@ async function loadCanvgModule() {
   }
 
   return { Canvg, version: mod?.CANVG_VERSION || mod?.version || 'unknown' };
+}
+
+async function loadVectorPdfModule() {
+  if (!vectorPdfModulePromise) {
+    vectorPdfModulePromise = import('/static/vendor/pdf-vector.browser.js')
+      .catch((error) => {
+        vectorPdfModulePromise = null;
+        throw error;
+      });
+  }
+
+  const mod = await vectorPdfModulePromise;
+  const jsPDF = mod?.jsPDF;
+  const svg2pdf = mod?.svg2pdf;
+
+  if (typeof jsPDF !== 'function') {
+    throw new Error('jsPDF API mismatch: expected jsPDF constructor.');
+  }
+  if (typeof svg2pdf !== 'function') {
+    throw new Error('svg2pdf API mismatch: expected svg2pdf(svg, pdf, options).');
+  }
+
+  if (isDevMode && !hasLoggedVectorPdfDiagnostics) {
+    hasLoggedVectorPdfDiagnostics = true;
+    console.info('[pdf] vector renderer import ok', {
+      path: '/static/vendor/pdf-vector.browser.js',
+      api: 'svg2pdf(svg, pdf, options)',
+    });
+  }
+
+  return { jsPDF, svg2pdf };
 }
 
 async function renderSvgPageToCanvas(svgText, pageNumber, totalPages, renderScale = 2) {
@@ -521,20 +554,50 @@ async function renderSvgPageToCanvas(svgText, pageNumber, totalPages, renderScal
   return { canvas, width, height };
 }
 
+function parseViewBoxDimensions(svgText, svgMeta = null) {
+  const parseNumeric = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
+
+  const metaViewBox = typeof svgMeta?.viewBox === 'string' ? svgMeta.viewBox : null;
+  const parseViewBox = (value) => {
+    const tokens = String(value || '').trim().split(/\s+/).map(Number);
+    if (tokens.length !== 4) return null;
+    const width = parseNumeric(tokens[2]);
+    const height = parseNumeric(tokens[3]);
+    if (!width || !height) return null;
+    return { width, height };
+  };
+
+  const parsed = parseViewBox(metaViewBox);
+  if (parsed) return parsed;
+
+  const { width, height } = parseSvgDimensions(svgText);
+  return { width, height };
+}
+
 function normalizeEngravingPages(payload) {
   const rawPages = payload?.pages ?? payload?.artifacts ?? payload?.data?.pages ?? [];
+  const rawMeta = Array.isArray(payload?.svg_meta)
+    ? payload.svg_meta
+    : (Array.isArray(payload?.data?.svg_meta) ? payload.data.svg_meta : []);
   if (!Array.isArray(rawPages)) {
     throw new Error('Engraving returned no SVG pages.');
   }
 
   const pages = rawPages.map((item, index) => {
     if (typeof item === 'string') {
-      return { index: index + 1, svg: item };
+      return { index: index + 1, svg: item, svg_meta: rawMeta[index] || null };
     }
     if (item && typeof item === 'object' && typeof item.svg === 'string') {
-      return { index: item.index || item.page || index + 1, svg: item.svg };
+      return {
+        index: item.index || item.page || index + 1,
+        svg: item.svg,
+        svg_meta: item.svg_meta || rawMeta[index] || null,
+      };
     }
-    return { index: index + 1, svg: '' };
+    return { index: index + 1, svg: '', svg_meta: rawMeta[index] || null };
   });
 
   const hasSvgMarkup = pages.length > 0 && pages.every((page) => {
@@ -575,28 +638,56 @@ function triggerPdfDownload(pdfBytes, filename) {
 }
 
 async function buildPdfFromSvgPages(pages, score) {
-  const jsPdfCtor = window.jspdf?.jsPDF;
-  if (typeof jsPdfCtor !== 'function') {
-    throw new Error('PDF engine is unavailable (jsPDF failed to load).');
-  }
+  const { jsPDF, svg2pdf } = await loadVectorPdfModule();
 
-  setExportPdfStatus(`Building PDF page 1/${pages.length}…`);
-  const firstRendered = await renderSvgPageToCanvas(pages[0].svg, 1, pages.length);
-  const doc = new jsPdfCtor({
-    orientation: firstRendered.width >= firstRendered.height ? 'landscape' : 'portrait',
+  const firstPageSize = parseViewBoxDimensions(pages[0].svg, pages[0].svg_meta);
+  setExportPdfStatus(`Building PDF page 1 of ${pages.length}…`);
+  const doc = new jsPDF({
     unit: 'pt',
-    format: [firstRendered.width, firstRendered.height],
+    format: [firstPageSize.width, firstPageSize.height],
     compress: true,
   });
-  doc.addImage(firstRendered.canvas.toDataURL('image/png'), 'PNG', 0, 0, firstRendered.width, firstRendered.height, undefined, 'FAST');
 
-  for (let i = 1; i < pages.length; i += 1) {
+  for (let i = 0; i < pages.length; i += 1) {
     await delayToKeepUiResponsive();
     const pageNumber = i + 1;
-    setExportPdfStatus(`Building PDF page ${pageNumber}/${pages.length}…`);
-    const rendered = await renderSvgPageToCanvas(pages[i].svg, pageNumber, pages.length);
-    doc.addPage([rendered.width, rendered.height], rendered.width >= rendered.height ? 'landscape' : 'portrait');
-    doc.addImage(rendered.canvas.toDataURL('image/png'), 'PNG', 0, 0, rendered.width, rendered.height, undefined, 'FAST');
+    const page = pages[i];
+    const { width, height } = parseViewBoxDimensions(page.svg, page.svg_meta);
+    const { svgEl } = parseSvgDimensions(page.svg);
+    if (i > 0) {
+      doc.addPage([width, height], 'pt');
+    }
+
+    setExportPdfStatus(`Building PDF page ${pageNumber} of ${pages.length}…`);
+    try {
+      await svg2pdf(svgEl, doc, { x: 0, y: 0, width, height });
+    } catch (vectorError) {
+      if (isDevMode) {
+        console.error('[pdf] page render failed', {
+          error: vectorError,
+          pageIndex: pageNumber,
+          viewBoxWidth: width,
+          viewBoxHeight: height,
+          renderer: 'svg2pdf-primary',
+        });
+      }
+
+      try {
+        const rendered = await renderSvgPageToCanvas(page.svg, pageNumber, pages.length);
+        doc.addImage(rendered.canvas.toDataURL('image/png'), 'PNG', 0, 0, width, height, undefined, 'FAST');
+      } catch (fallbackError) {
+        if (isDevMode) {
+          console.error('[pdf] page render failed', {
+            error: fallbackError,
+            pageIndex: pageNumber,
+            viewBoxWidth: width,
+            viewBoxHeight: height,
+            renderer: 'canvg-fallback',
+          });
+        }
+        throw new Error(`SVG→PDF renderer failed: ${shortenErrorMessage(vectorError?.message || vectorError)}`);
+      }
+    }
   }
 
   setExportPdfStatus('Finalizing PDF bytes…');
@@ -782,6 +873,25 @@ function runCanvgImportSelfCheck() {
 }
 
 runCanvgImportSelfCheck();
+
+function runVectorPdfImportSelfCheck() {
+  if (!isDevMode || typeof runVectorPdfImportSelfCheck._ran !== 'undefined') return;
+  runVectorPdfImportSelfCheck._ran = true;
+
+  loadVectorPdfModule()
+    .then(() => {
+      console.info('[pdf] vector renderer self-check passed', {
+        path: '/static/vendor/pdf-vector.browser.js',
+      });
+    })
+    .catch((error) => {
+      const rootMessage = shortenErrorMessage(error?.message || error);
+      console.error('[pdf] vector renderer self-check failed', { error, message: rootMessage });
+      setExportPdfError(`PDF export dependency check failed: ${rootMessage}`);
+    });
+}
+
+runVectorPdfImportSelfCheck();
 
 if (isDevMode && typeof window !== 'undefined') {
   window.__pdfSelfTest = async () => {
@@ -2075,10 +2185,13 @@ exportPDFBtn.onclick = async () => {
     window.setTimeout(() => setExportPdfStatus(''), 2500);
   } catch (error) {
     setExportPdfStatus('');
-    const baseMessage = formatApiErrorMessage(error) || 'Unexpected export failure.';
+    const rootMessage = String(error?.message || 'Unexpected export failure.');
     const requestSuffix = requestId ? ` (request_id: ${requestId})` : '';
-    const devSuffix = isDevMode ? ` (dev: ${String(error?.message || error)})` : '';
-    const message = `Unable to export PDF right now. ${baseMessage}${requestSuffix}${devSuffix}`;
+    const baseMessage = rootMessage.startsWith('SVG→PDF renderer failed:')
+      ? `Unable to export PDF right now. ${rootMessage}${requestSuffix}`
+      : `Unable to export PDF right now. ${formatApiErrorMessage(error) || 'Unexpected export failure.'}${requestSuffix}`;
+    const devSuffix = isDevMode ? ` (dev: ${rootMessage})` : '';
+    const message = `${baseMessage}${devSuffix}`;
     if (isDevMode) {
       console.error('[pdf] export failed', { error, message, requestId });
     }
