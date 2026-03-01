@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-import json
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -33,8 +32,7 @@ from app.models import (
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, preview_service
-from app.services.engraving_export import PDFExportDependencyError, export_service
-from app.services.pdf_deps import cairo_dependency_message, check_pdf_export_capabilities
+from app.services.pdf_deps import check_pdf_export_capabilities
 from app.services.score_normalization import normalize_score_for_rendering
 from app.services.score_validation import validate_score, validate_score_diagnostics
 
@@ -303,90 +301,23 @@ def validate_score_endpoint(payload: HarmonizeRequest):
 
 @app.post("/api/export-pdf")
 def export_pdf_endpoint(payload: PDFExportRequest):
-    action = "PDF export"
-    try:
-        if payload.score.meta.stage not in {"melody", "satb"}:
-            raise ValueError("Score stage must be melody or satb before PDF export.")
-    except ValueError as exc:
-        raise _handle_user_error(action, exc) from exc
-
-    normalized_score = normalize_score_for_rendering(payload.score)
-    diagnostics = validate_score_diagnostics(normalized_score)
-    if diagnostics.fatal:
-        raise _handle_user_error(action, _friendly_validation_error(action, diagnostics.fatal))
-    if diagnostics.warnings:
-        log_event(logger, "validation_failed", level=logging.WARNING, action=action, diagnostics=diagnostics.warnings)
-
-    capabilities = check_pdf_export_capabilities()
+    request_id = current_request_id()
     log_event(
         logger,
-        "pdf_export_capabilities",
-        verovio_pdf_available=capabilities["verovio_pdf_available"],
-        fallback_svg_to_pdf_available=capabilities["fallback_svg_to_pdf_available"],
-        missing=capabilities["missing"],
+        "pdf_export_deprecated",
+        level=logging.WARNING,
+        request_id=request_id,
+        stage=payload.score.meta.stage,
     )
-    if not capabilities["verovio_pdf_available"] and not capabilities["fallback_svg_to_pdf_available"]:
-        message = cairo_dependency_message()
-        log_event(
-            logger,
-            "pdf_export_dependency_missing",
-            level=logging.WARNING,
-            request_id=current_request_id(),
-            missing_dep="cairo",
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": message,
-                "request_id": current_request_id(),
-            },
-        )
-
-    log_event(logger, "export_started", format="pdf")
-    try:
-        export_result = export_service.export_pdf(normalized_score)
-    except PDFExportDependencyError as exc:
-        log_event(
-            logger,
-            "pdf_export_dependency_missing",
-            level=logging.WARNING,
-            request_id=current_request_id(),
-            missing_dep="cairo",
-            error_message=str(exc),
-        )
-        raise HTTPException(status_code=422, detail={"message": str(exc), "request_id": current_request_id()}) from exc
-    except Exception as exc:
-        log_event(
-            logger,
-            "export_failed",
-            format="pdf",
-            level=logging.ERROR,
-            exception_type=type(exc).__name__,
-            error_message=str(exc),
-        )
-        raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
-
-    log_event(
-        logger,
-        "export_completed",
-        format="pdf",
-        output_size_bytes=len(export_result.pdf_bytes),
-        page_count=export_result.page_count,
-        pipeline=export_result.pipeline,
-        pipeline_path="native" if export_result.pipeline == "native_pdf" else "fallback",
-    )
-    response_headers = {
-        "Content-Disposition": "attachment; filename=choir-score.pdf",
-        "X-Request-ID": current_request_id(),
-        "X-Composer-Warnings-Count": str(len(diagnostics.warnings)),
-    }
-    if diagnostics.warnings:
-        response_headers["X-Export-Warnings"] = json.dumps(diagnostics.warnings)
-
-    return Response(
-        content=export_result.pdf_bytes,
-        media_type="application/pdf",
-        headers=response_headers,
+    return JSONResponse(
+        status_code=501,
+        content={
+            "detail": {
+                "message": "PDF export is now generated in the browser. Please update the client.",
+                "request_id": request_id,
+            }
+        },
+        headers={"X-Request-ID": request_id},
     )
 
 
