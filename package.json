@@ -1,0 +1,11 @@
+{
+  "name": "choir-composer-frontend-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frontend tooling dependencies for browser-side PDF export",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "canvg": "^4.0.3",
+    "jspdf": "^2.5.2"
+  }
+}
