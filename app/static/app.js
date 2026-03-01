@@ -397,6 +397,43 @@ function delayToKeepUiResponsive() {
   });
 }
 
+let canvgModulePromise = null;
+let hasLoggedCanvgDiagnostics = false;
+
+function shortenErrorMessage(errorMessage, maxLength = 180) {
+  const normalized = String(errorMessage || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'unknown error';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+async function loadCanvgModule() {
+  if (!canvgModulePromise) {
+    canvgModulePromise = import('/static/vendor/canvg.browser.js')
+      .catch((error) => {
+        canvgModulePromise = null;
+        throw error;
+      });
+  }
+
+  const mod = await canvgModulePromise;
+  const Canvg = mod?.Canvg ?? mod?.default?.Canvg ?? mod?.default;
+  if (!Canvg || typeof Canvg.fromString !== 'function') {
+    throw new Error('canvg API mismatch: expected Canvg.fromString(ctx, svg, options).');
+  }
+
+  if (isDevMode && !hasLoggedCanvgDiagnostics) {
+    hasLoggedCanvgDiagnostics = true;
+    console.info('[pdf] canvg import ok', {
+      path: '/static/vendor/canvg.browser.js',
+      api: 'Canvg.fromString',
+      version: mod?.CANVG_VERSION || mod?.version || 'unknown',
+    });
+  }
+
+  return { Canvg, version: mod?.CANVG_VERSION || mod?.version || 'unknown' };
+}
+
 async function renderSvgPageToCanvas(svgText, pageNumber, totalPages, renderScale = 2) {
   const { width, height } = parseSvgDimensions(svgText);
   const canvas = document.createElement('canvas');
@@ -412,16 +449,20 @@ async function renderSvgPageToCanvas(svgText, pageNumber, totalPages, renderScal
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, width, height);
 
-  const canvgGlobal = window.canvg;
-  const canvgFactory = canvgGlobal?.Canvg?.fromString || canvgGlobal?.fromString;
-  if (typeof canvgFactory !== 'function') {
-    throw new Error('SVG renderer is unavailable (canvg failed to load).');
+  let Canvg;
+  try {
+    ({ Canvg } = await loadCanvgModule());
+  } catch (error) {
+    const rootMessage = shortenErrorMessage(error?.message || error);
+    if (isDevMode) {
+      console.error('[pdf] canvg import failed', { error, pageNumber, totalPages });
+    }
+    throw new Error(`SVG renderer is unavailable: ${rootMessage}`);
   }
 
-  const renderer = await canvgFactory(ctx, svgText, {
+  const renderer = await Canvg.fromString(ctx, svgText, {
     ignoreAnimation: true,
     ignoreMouse: true,
-    enableRedraw: false,
   });
   await renderer.render();
   return { canvas, width, height };
@@ -667,6 +708,27 @@ function runFormatApiErrorMessageRuntimeCheck() {
 }
 
 runFormatApiErrorMessageRuntimeCheck();
+
+
+function runCanvgImportSelfCheck() {
+  if (!isDevMode || typeof runCanvgImportSelfCheck._ran !== 'undefined') return;
+  runCanvgImportSelfCheck._ran = true;
+
+  loadCanvgModule()
+    .then(({ version }) => {
+      console.info('[pdf] canvg self-check passed', {
+        version,
+        path: '/static/vendor/canvg.browser.js',
+      });
+    })
+    .catch((error) => {
+      const rootMessage = shortenErrorMessage(error?.message || error);
+      console.error('[pdf] canvg self-check failed', { error, message: rootMessage });
+      setExportPdfError(`PDF export dependency check failed: ${rootMessage}`);
+    });
+}
+
+runCanvgImportSelfCheck();
 
 if (isDevMode && typeof window !== 'undefined') {
   window.__pdfSelfTest = async () => {
@@ -1962,6 +2024,9 @@ exportPDFBtn.onclick = async () => {
     const baseMessage = formatApiErrorMessage(error);
     const includesRequestId = typeof baseMessage === 'string' && baseMessage.includes('request_id:');
     const message = `Unable to export PDF right now. ${baseMessage}${!includesRequestId && requestId ? ` (request_id: ${requestId})` : ''}`;
+    if (isDevMode) {
+      console.error('[pdf] export failed', { error, message, requestId });
+    }
     setExportPdfError(message);
     showErrors([message]);
   } finally {

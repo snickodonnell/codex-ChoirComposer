@@ -1,0 +1,20 @@
+from pathlib import Path
+
+
+def test_canvg_is_not_loaded_from_cdn_and_uses_local_bundle():
+    index_html = Path('app/static/index.html').read_text(encoding='utf-8')
+    assert 'cdn.jsdelivr.net/npm/canvg' not in index_html
+    assert '/static/app.js?v=20260301-canvg-bundle' in index_html
+
+
+def test_app_uses_dynamic_canvg_import_with_actionable_errors():
+    app_js = Path('app/static/app.js').read_text(encoding='utf-8')
+    assert "import('/static/vendor/canvg.browser.js')" in app_js
+    assert 'Canvg.fromString' in app_js
+    assert 'SVG renderer is unavailable:' in app_js
+
+
+def test_bundled_canvg_asset_exists():
+    bundled = Path('app/static/vendor/canvg.browser.js')
+    assert bundled.exists()
+    assert bundled.stat().st_size > 0
