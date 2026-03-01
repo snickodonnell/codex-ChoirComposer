@@ -12,6 +12,7 @@ LyricMode = Literal["none", "single", "melisma_start", "melisma_continue", "tie_
 LyricRhythmPreset = Literal["syllabic", "mixed", "melismatic"]
 PrimaryMode = Literal["ionian", "dorian", "phrygian", "lydian", "mixolydian", "aeolian", "locrian"]
 MoodName = Literal["Uplifting", "Prayerful", "Joyful", "Reflective", "Triumphant", "Peaceful", "Lament"]
+SeedStrategy = Literal["random", "stable"]
 
 VALID_TONICS = {"C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb", "G", "G#", "Ab", "A", "A#", "Bb", "B"}
 MODE_FAMILIES = {
@@ -122,6 +123,8 @@ class CompositionRequest(BaseModel):
     sections: list[LyricSection]
     arrangement: list[ArrangementItem] = Field(default_factory=list)
     preferences: CompositionPreferences = Field(default_factory=CompositionPreferences)
+    seed_strategy: SeedStrategy = "random"
+    seed: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class ScoreSyllable(BaseModel):
@@ -222,6 +225,8 @@ class CanonicalScore(BaseModel):
 class MelodyResponse(BaseModel):
     score: CanonicalScore
     warnings: list[str] = Field(default_factory=list)
+    seed_strategy_used: SeedStrategy
+    seed_used: str
 
 
 class RegenerateRequest(BaseModel):
@@ -229,6 +234,8 @@ class RegenerateRequest(BaseModel):
     selected_units: list[str] = Field(default_factory=list)
     selected_clusters: list[str] = Field(default_factory=list)
     section_clusters: dict[str, str] = Field(default_factory=dict)
+    seed_strategy: SeedStrategy = "random"
+    seed: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class SATBResponse(BaseModel):

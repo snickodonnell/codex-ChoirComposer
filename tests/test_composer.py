@@ -261,6 +261,7 @@ def test_auto_anacrusis_is_deterministic_for_same_request_inputs():
         sections=[LyricSection(id="verse-1", label="verse", text="glory forever rising now in wonder")],
         arrangement=[ArrangementItem(section_id="verse-1", progression_cluster="Verse", anacrusis_mode="auto")],
         preferences=CompositionPreferences(time_signature="4/4", lyric_rhythm_preset="mixed", key="C", tempo_bpm=88),
+        seed_strategy="stable",
     )
 
     melody_a = generate_melody_score(req)
@@ -830,8 +831,8 @@ def test_generate_melody_repairs_phrase_end_barlines(monkeypatch):
 
     original_compose = composer_service._compose_melody_once
 
-    def broken_compose(_req, _attempt_number):
-        score = original_compose(_req, _attempt_number)
+    def broken_compose(_req, _attempt_number, _generation_seed):
+        score = original_compose(_req, _attempt_number, _generation_seed)
         soprano = [n for m in score.measures for n in m.voices["soprano"] if not n.is_rest]
         phrase_tail = next(n for n in reversed(soprano) if n.lyric_syllable_id)
         phrase_tail.beats -= 1

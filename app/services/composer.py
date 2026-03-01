@@ -4,7 +4,9 @@ import logging
 import math
 import random
 import hashlib
+import json
 import re
+import uuid
 from dataclasses import dataclass
 
 from app.logging_utils import log_event
@@ -1308,7 +1310,7 @@ def _enforce_section_measure_capacities(
 
     return constrained
 
-def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> CanonicalScore:
+def _compose_melody_once(req: CompositionRequest, attempt_number: int, generation_seed: str) -> CanonicalScore:
     key, ts, tempo = choose_defaults(req.preferences.style, req.preferences.mood)
     if req.preferences.key:
         key = req.preferences.key
@@ -1319,7 +1321,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
 
     scale = parse_key(key, req.preferences.primary_mode)
     scale_set = set(scale.semitones)
-    base_seed = f"{key}-{ts}-{tempo}-{req.preferences.style}"
+    base_seed = _derive_attempt_seed(req, key=key, time_signature=ts, tempo=tempo, generation_seed=generation_seed)
     random.seed(base_seed if attempt_number == 0 else f"{base_seed}-attempt-{attempt_number}")
 
     sections: list[ScoreSection] = []
@@ -1829,17 +1831,43 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int) -> Canoni
     return score
 
 
+def _derive_seed_from_inputs(req: CompositionRequest, nonce: str | None = None) -> str:
+    seed_payload = {
+        "sections": [section.model_dump() for section in req.sections],
+        "arrangement": [item.model_dump() for item in req.arrangement],
+        "preferences": req.preferences.model_dump(),
+    }
+    raw = json.dumps(seed_payload, sort_keys=True, separators=(",", ":"))
+    if nonce:
+        raw = f"{raw}|nonce={nonce}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def resolve_generation_seed(req: CompositionRequest) -> tuple[str, str]:
+    strategy = req.seed_strategy if req.seed_strategy in {"stable", "random"} else "random"
+    if req.seed:
+        return strategy, req.seed
+    if strategy == "stable":
+        return strategy, _derive_seed_from_inputs(req)
+    return strategy, _derive_seed_from_inputs(req, nonce=str(uuid.uuid4()))
+
+
+def _derive_attempt_seed(req: CompositionRequest, *, key: str, time_signature: str, tempo: int, generation_seed: str) -> str:
+    return f"{key}-{time_signature}-{tempo}-{req.preferences.style}|seed={generation_seed}"
+
+
 def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
     primary_mode = req.preferences.primary_mode
     error_history: list[str] = []
     last_failure_exception_type = "UnknownMelodyGenerationFailure"
     last_failure_diagnostics: list[str] = []
 
-    log_event(logger, "melody_generation_started", section_count=len(req.sections))
+    _seed_strategy_used, generation_seed = resolve_generation_seed(req)
+    log_event(logger, "melody_generation_started", section_count=len(req.sections), seed_strategy=req.seed_strategy, seed_used=generation_seed)
     for attempt_idx in range(MAX_GENERATION_ATTEMPTS):
         attempt = attempt_idx + 1
         try:
-            score = _compose_melody_once(req, attempt_idx)
+            score = _compose_melody_once(req, attempt_idx, generation_seed)
         except VerseFormConstraintError as exc:
             log_event(
                 logger,
@@ -1919,9 +1947,10 @@ def regenerate_score(
     selected_units: list[str] | None = None,
     selected_clusters: list[str] | None = None,
     section_clusters: dict[str, str] | None = None,
+    seed: str | None = None,
 ) -> CanonicalScore:
     score = normalize_score_for_rendering(score)
-    rng = random.Random()
+    rng = random.Random(seed)
     scale_set = set(parse_key(score.meta.key, score.meta.primary_mode).semitones)
     requested_units = selected_units if selected_units is not None else selected_clusters or []
     score.chord_progression = _regenerate_progression_for_units(
