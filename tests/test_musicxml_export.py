@@ -62,6 +62,19 @@ def test_export_musicxml_includes_arrangement_music_unit_mapping_comments():
     assert "arrangement_index=0,music_unit_id=verse,verse_index=1" in xml
     assert "arrangement_index=1,music_unit_id=verse,verse_index=2" in xml
 
+
+def test_export_musicxml_uses_time_signature_beat_type_for_metronome_mark():
+    req = CompositionRequest(
+        sections=[LyricSection(label="verse", text="Amazing grace how sweet")],
+        preferences=CompositionPreferences(key="G", time_signature="6/8", tempo_bpm=88),
+    )
+
+    satb = harmonize_score(generate_melody_score(req))
+    xml = export_musicxml(satb)
+
+    assert "<time><beats>6</beats><beat-type>8</beat-type></time>" in xml
+    assert "<metronome><beat-unit>eighth</beat-unit><per-minute>88</per-minute></metronome>" in xml
+
 from app.models import ArrangementMusicUnit, CanonicalScore, ScoreMeasure, ScoreMeta, ScoreNote, ScoreSection
 
 

@@ -40,6 +40,7 @@ def export_musicxml(score: CanonicalScore) -> str:
     log_event(logger, "musicxml_render_started", measure_count=len(score.measures), stage=score.meta.stage)
 
     beats_i, beat_type_i = _parse_time_signature(score.meta.time_signature)
+    tempo_beat_unit = _metronome_beat_unit(beat_type_i)
     divisions = _resolve_divisions(score)
     fifths, mode = _key_signature(score.meta.key)
     chords = {c.measure_number: c for c in score.chord_progression}
@@ -81,7 +82,7 @@ def export_musicxml(score: CanonicalScore) -> str:
                     f"        <clef number=\"2\"><sign>{CLEFS_BY_STAFF[2][0]}</sign><line>{CLEFS_BY_STAFF[2][1]}</line></clef>",
                     "      </attributes>",
                     (
-                        "      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit>"
+                        f"      <direction placement=\"above\"><direction-type><metronome><beat-unit>{tempo_beat_unit}</beat-unit>"
                         f"<per-minute>{score.meta.tempo_bpm}</per-minute></metronome></direction-type><sound tempo=\"{score.meta.tempo_bpm}\"/></direction>"
                     ),
                 ]
@@ -481,6 +482,16 @@ def _backup_xml(measure_duration: int) -> list[str]:
 def _parse_time_signature(time_signature: str) -> tuple[int, int]:
     beats, beat_type = time_signature.split("/")
     return int(beats), int(beat_type)
+
+
+def _metronome_beat_unit(beat_type: int) -> str:
+    return {
+        1: "whole",
+        2: "half",
+        4: "quarter",
+        8: "eighth",
+        16: "16th",
+    }.get(beat_type, "quarter")
 
 
 def _resolve_divisions(score: CanonicalScore) -> int:
