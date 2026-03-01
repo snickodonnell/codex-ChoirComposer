@@ -546,3 +546,96 @@ def test_generate_melody_34_manual_pickup_enforces_exact_verse_measure_structure
     for measure in score["measures"]:
         total_beats = sum(note["beats"] for note in measure["voices"]["soprano"])
         assert total_beats == 3
+
+
+def _amazing_grace_payload(seed_strategy: str = "random", seed: str | None = None) -> dict:
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed",
+            },
+            {
+                "id": "v3",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Through many dangers, toils, and snares\nI have already come\n'Tis grace hath brought me safe thus far\nAnd grace will lead me home",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v3", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+        ],
+        "preferences": {
+            "key": "G",
+            "primary_mode": "ionian",
+            "time_signature": "3/4",
+            "tempo_bpm": 88,
+            "mood": "Prayerful",
+            "lyric_rhythm_preset": "syllabic",
+            "bars_per_verse": 16,
+        },
+        "seed_strategy": seed_strategy,
+    }
+    if seed:
+        payload["seed"] = seed
+    return payload
+
+
+def test_generate_melody_seed_modes_support_stable_and_random_behaviors():
+    stable_payload = _sample_request().model_dump()
+    stable_payload["seed_strategy"] = "stable"
+
+    res_a = client.post("/api/generate-melody", json=stable_payload)
+    res_b = client.post("/api/generate-melody", json=stable_payload)
+
+    assert res_a.status_code == 200
+    assert res_b.status_code == 200
+    body_a = res_a.json()
+    body_b = res_b.json()
+    assert body_a["seed_strategy_used"] == "stable"
+    assert body_b["seed_strategy_used"] == "stable"
+    assert body_a["seed_used"] == body_b["seed_used"]
+    assert body_a["score"] == body_b["score"]
+
+    random_payload = _sample_request().model_dump()
+    random_payload["seed_strategy"] = "random"
+
+    random_a = client.post("/api/generate-melody", json=random_payload)
+    random_b = client.post("/api/generate-melody", json=random_payload)
+
+    assert random_a.status_code == 200
+    assert random_b.status_code == 200
+    random_a_body = random_a.json()
+    random_b_body = random_b.json()
+    assert random_a_body["seed_strategy_used"] == "random"
+    assert random_b_body["seed_strategy_used"] == "random"
+    assert random_a_body["seed_used"] != random_b_body["seed_used"]
+
+
+def test_amazing_grace_default_random_generation_does_not_repeat_same_warning_profile():
+    recurring_profiles = []
+
+    for _ in range(4):
+        res = client.post("/api/generate-melody", json=_amazing_grace_payload(seed_strategy="random"))
+        assert res.status_code == 200
+        payload = res.json()
+        warnings = payload.get("warnings", [])
+        recurring_warnings = [
+            warning
+            for warning in warnings
+            if warning.startswith("Lyric phrase ending") or warning.startswith("Soprano strong-beat note")
+        ]
+        recurring_profiles.append((payload["seed_used"], len(recurring_warnings)))
+
+    assert len({seed for seed, _ in recurring_profiles}) == 4
+    assert len({count for _seed, count in recurring_profiles}) >= 2

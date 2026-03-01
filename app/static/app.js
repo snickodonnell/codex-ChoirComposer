@@ -932,6 +932,31 @@ const isDevMode = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].in
 const pdfExportButtonDefaultLabel = exportPDFBtn?.textContent || 'Download PDF';
 let hasLoggedMelodyGenerationErrorDebug = false;
 
+function getSeedRequestOptions() {
+  if (!isDevMode || typeof window === 'undefined') {
+    return { seed_strategy: 'random' };
+  }
+  const params = new URLSearchParams(window.location.search || '');
+  const strategyFromQuery = params.get('seed_strategy');
+  const strategyFromStorage = window.localStorage?.getItem('cc_seed_strategy');
+  const preferredStrategy = strategyFromQuery || strategyFromStorage;
+  const strategy = preferredStrategy === 'stable' ? 'stable' : 'random';
+  const seedFromQuery = params.get('seed');
+  const seedFromStorage = window.localStorage?.getItem('cc_seed');
+  const seed = seedFromQuery || seedFromStorage || '';
+  return seed ? { seed_strategy: strategy, seed } : { seed_strategy: strategy };
+}
+
+function logSeedMetadata(responsePayload, context) {
+  if (!isDevMode) return;
+  if (!responsePayload || typeof responsePayload !== 'object') return;
+  if (!responsePayload.seed_used) return;
+  console.info(`[seed:${context}]`, {
+    seed_strategy_used: responsePayload.seed_strategy_used,
+    seed_used: responsePayload.seed_used,
+  });
+}
+
 function getClientVersion() {
   if (typeof document === 'undefined') return 'unknown';
   const src = document.currentScript?.src || [...document.querySelectorAll('script[src]')].map((el) => el.src).find((item) => item.includes('/static/app.js'));
@@ -1407,10 +1432,12 @@ async function regenerateActiveMelody() {
     score: melodyScore,
     selected_units: [...regenerateClustersEl.selectedOptions].map((o) => o.value),
     section_clusters: currentVersion?.sectionClusterMap || {},
+    ...getSeedRequestOptions(),
   };
 
   const res = await post('/api/regenerate-melody', payload);
   const melodyPayload = await res.json();
+  logSeedMetadata(melodyPayload, 'regenerate-melody');
   const score = melodyPayload.score;
   showComposerWarnings(melodyPayload.warnings || []);
   appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
@@ -2228,7 +2255,7 @@ generateMelodyBtn.onclick = async () => {
   let res;
   let payload;
   try {
-    payload = collectPayload();
+    payload = { ...collectPayload(), ...getSeedRequestOptions() };
     res = await post('/api/generate-melody', payload);
   } catch (err) {
     if (err?.isValidationError) return;
@@ -2246,6 +2273,7 @@ generateMelodyBtn.onclick = async () => {
     return;
   }
   const melodyPayload = await res.json();
+  logSeedMetadata(melodyPayload, 'generate-melody');
   const score = melodyPayload.score;
   showComposerWarnings(melodyPayload.warnings || []);
   const sectionClusterMap = buildSectionClusterMap(payload);

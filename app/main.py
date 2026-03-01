@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -33,7 +34,7 @@ from app.models import (
     RegenerateRequest,
     SATBResponse,
 )
-from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score
+from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score, resolve_generation_seed
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, build_verovio_options, preview_service
 from app.services.pdf_deps import check_pdf_export_capabilities
@@ -214,9 +215,10 @@ def generate_melody_endpoint(payload: CompositionRequest):
         music_units_selected=[u for u in selected_units if u],
     )
     try:
-        score = normalize_score_for_rendering(generate_melody_score(payload))
+        seed_strategy_used, seed_used = resolve_generation_seed(payload)
+        score = normalize_score_for_rendering(generate_melody_score(payload.model_copy(update={"seed": seed_used})))
         warnings = _evaluate_melody_validation_gate(score)
-        return MelodyResponse(score=score, warnings=warnings)
+        return MelodyResponse(score=score, warnings=warnings, seed_strategy_used=seed_strategy_used, seed_used=seed_used)
     except MelodyGenerationFailedError as exc:
         log_event(
             logger,
@@ -245,13 +247,17 @@ def regenerate_melody_endpoint(payload: RegenerateRequest):
             regenerate=True,
             selected_units=payload.selected_units or payload.selected_clusters,
         )
+        regeneration_seed = payload.seed or str(uuid.uuid4())
         return MelodyResponse(
             score=normalize_score_for_rendering(regenerate_score(
                 payload.score,
                 payload.selected_units,
                 payload.selected_clusters,
                 payload.section_clusters,
-            ))
+                seed=regeneration_seed,
+            )),
+            seed_strategy_used="random",
+            seed_used=regeneration_seed,
         )
     except ValueError as exc:
         raise _handle_user_error("Melody regeneration", exc) from exc
