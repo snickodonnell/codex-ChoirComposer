@@ -835,7 +835,10 @@ def test_amazing_grace_manual_pickup_16_bars_preview_and_strict_lyric_coverage_i
 
     class StubPreviewService:
         def engrave_score(self, score, options):
-            return ([engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>ok</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False)
+            section = next(item for item in score.sections if item.id == "sec-1")
+            tspans = "".join(f"<tspan>{syllable.text.lower()}</tspan>" for syllable in section.syllables)
+            svg = f"<svg><text>{tspans}</text></svg>"
+            return ([engraving_preview.EngravedPageArtifact(page=1, svg=svg, svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False)
 
     monkeypatch.setattr("app.main.preview_service", StubPreviewService())
 
@@ -844,10 +847,11 @@ def test_amazing_grace_manual_pickup_16_bars_preview_and_strict_lyric_coverage_i
     melody_score = melody_response.json()["score"]
 
     preview_response = client.post(
-        "/api/engrave/preview",
+        "/api/engrave/preview?debug_svg_meta=true",
         json={"score": melody_score, "preview_mode": "melody", "include_all_pages": False, "scale": 42},
     )
     assert preview_response.status_code == 200
+    preview_payload = preview_response.json()
 
     validate_response = client.post("/api/validate-score", json={"score": melody_score})
     assert validate_response.status_code == 200
@@ -866,5 +870,10 @@ def test_amazing_grace_manual_pickup_16_bars_preview_and_strict_lyric_coverage_i
             if syllable_id in text_by_id:
                 underlay_sequence.append(text_by_id[syllable_id])
 
+    svg_content = preview_payload["artifacts"][0]["svg"].lower()
     assert "found" in underlay_sequence
     assert "blind" in underlay_sequence
+    assert "found" in svg_content
+    assert "blind" in svg_content
+    assert preview_payload["lyric_debug_comparison"]["syllables_missing_in_score"] == []
+    assert preview_payload["lyric_debug_comparison"]["syllables_missing_in_svg"] == []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from html import unescape
 
 from app.models import CanonicalScore
 
@@ -10,6 +11,39 @@ _CONTINUATION_MODES = {"tie_continue", "melisma_continue"}
 
 def _normalize_lyric_text(text: str) -> str:
     return re.sub(r"[^\w']+", "", text.strip().lower())
+
+
+def _extract_svg_text_tokens(svg_pages: list[str]) -> set[str]:
+    joined_svg = "\n".join(svg_pages)
+    fragments = re.findall(r">([^<>]+)<", joined_svg)
+    tokens: set[str] = set()
+    for fragment in fragments:
+        text = unescape(fragment).strip()
+        if not text:
+            continue
+        normalized = _normalize_lyric_text(text)
+        if normalized:
+            tokens.add(normalized)
+    return tokens
+
+
+def build_preview_lyric_comparison(score: CanonicalScore, svg_pages: list[str], section_id: str = "sec-1") -> dict[str, object]:
+    section = next((item for item in score.sections if item.id == section_id), None)
+    score_syllables = [
+        _normalize_lyric_text(syllable.text)
+        for syllable in (section.syllables if section else [])
+        if _normalize_lyric_text(syllable.text)
+    ]
+    score_syllable_set = set(score_syllables)
+    svg_text_tokens = _extract_svg_text_tokens(svg_pages)
+
+    return {
+        "section_id": section_id,
+        "score_syllables": score_syllables,
+        "svg_text_tokens": sorted(svg_text_tokens),
+        "syllables_missing_in_score": sorted(svg_text_tokens - score_syllable_set),
+        "syllables_missing_in_svg": sorted(score_syllable_set - svg_text_tokens),
+    }
 
 
 def build_lyric_underlay_report(score: CanonicalScore) -> dict[str, object]:

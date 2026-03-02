@@ -36,7 +36,7 @@ from app.models import (
     SATBResponse,
 )
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score, resolve_generation_seed
-from app.services.lyric_debug_report import build_lyric_underlay_report
+from app.services.lyric_debug_report import build_lyric_underlay_report, build_preview_lyric_comparison
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, build_verovio_options, preview_service
 from app.services.pdf_deps import check_pdf_export_capabilities
@@ -476,8 +476,14 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest, debug_svg_meta: b
         log_event(logger, "engraving_preview_failed", level=logging.ERROR, reason=str(exc))
         raise HTTPException(status_code=500, detail={"message": str(exc), "request_id": current_request_id()}) from exc
 
+    lyric_debug_comparison = None
     if debug_svg_meta:
         _log_svg_meta_summary("preview", artifacts, options)
+        lyric_debug_comparison = build_preview_lyric_comparison(
+            normalize_score_for_rendering(payload.score),
+            [item.svg for item in artifacts],
+            section_id="sec-1",
+        )
 
     response = EngravingPreviewResponse(
         preview_mode=payload.preview_mode,
@@ -486,6 +492,7 @@ def engrave_preview_endpoint(payload: EngravingPreviewRequest, debug_svg_meta: b
         svg_meta=[SvgMeta.model_validate(item.svg_meta) for item in artifacts],
         svg_hash=[item.svg_hash for item in artifacts],
         warnings=warnings,
+        lyric_debug_comparison=lyric_debug_comparison,
     )
     log_event(logger, "engraving_preview_completed", preview_mode=payload.preview_mode, pages=len(response.artifacts), cache_hit=cache_hit)
     return response
