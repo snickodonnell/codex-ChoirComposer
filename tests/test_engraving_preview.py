@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import ArrangementItem, CompositionPreferences, CompositionRequest, LyricSection
+from app.models import ArrangementItem, CompositionPreferences, CompositionRequest, LyricSection, ScoreSyllable
 from app.services import engraving_preview
 from app.services.composer import generate_melody_score, harmonize_score
 
@@ -155,6 +155,40 @@ def test_preview_endpoint_fails_with_fatal_diagnostics(monkeypatch):
     res = client.post("/api/engrave/preview", json=payload)
 
     assert res.status_code == 422
+
+
+
+
+def _satb_score_with_missing_lyric_syllable():
+    satb = harmonize_score(_melody_score())
+    section = satb.sections[0]
+    section.syllables.append(
+        ScoreSyllable(
+            id=f"{section.id}-missing-debug",
+            text="found",
+            section_id=section.id,
+            word_index=999,
+            syllable_index_in_word=0,
+            word_text="found",
+        )
+    )
+    return satb
+
+
+def test_preview_and_pages_block_missing_lyric_coverage():
+    satb = _satb_score_with_missing_lyric_syllable()
+    preview_payload = {"score": satb.model_dump(), "preview_mode": "satb", "include_all_pages": False, "scale": 42}
+    pages_payload = {"score": satb.model_dump(), "stage": "satb", "include_all_pages": False, "scale": 42}
+
+    preview_response = client.post("/api/engrave/preview", json=preview_payload)
+    pages_response = client.post("/api/engrave/pages", json=pages_payload)
+
+    assert preview_response.status_code == 422
+    assert pages_response.status_code == 422
+    preview_diagnostics = preview_response.json()["detail"].get("diagnostics", [])
+    pages_diagnostics = pages_response.json()["detail"].get("diagnostics", [])
+    assert any("Missing lyric syllables:" in diagnostic for diagnostic in preview_diagnostics)
+    assert any("Missing lyric syllables:" in diagnostic for diagnostic in pages_diagnostics)
 
 
 def test_build_toolkit_applies_hymn_layout_options(monkeypatch):

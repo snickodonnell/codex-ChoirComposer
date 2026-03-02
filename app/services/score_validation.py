@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import re
 
 from app.models import CanonicalScore, VoiceName
 from app.services.music_theory import NOTE_TO_SEMITONE, VOICE_RANGES, VOICE_TESSITURA, normalize_note_name, parse_key, pitch_to_midi, triad_pitch_classes
@@ -173,11 +174,38 @@ def _validate_lyric_mapping(score: CanonicalScore) -> list[str]:
         errors.append(f"Verse contains lyricless notes at indices {lyricless_indices} (outside interlude).")
 
     for section in score.sections:
-        missing = expected_ids[section.id] - mapped_ids[section.id]
-        if missing:
-            errors.append(f"Section {section.id} has unmapped syllables: {sorted(missing)}")
+        coverage_error = validate_lyric_coverage(section, mapped_ids[section.id])
+        if coverage_error:
+            errors.append(coverage_error)
 
     return errors
+
+
+def validate_lyric_coverage(section, covered_syllable_ids: set[str]) -> str | None:
+    missing_ids: list[str] = []
+    missing_texts: list[str] = []
+    for syllable in section.syllables:
+        normalized = syllable.text.strip()
+        if not normalized:
+            continue
+        if re.fullmatch(r"-+", normalized):
+            continue
+        if re.fullmatch(r"[\W_]+", normalized):
+            continue
+        if syllable.id in covered_syllable_ids:
+            continue
+        missing_ids.append(syllable.id)
+        missing_texts.append(syllable.text)
+
+    if not missing_ids:
+        return None
+
+    missing_text_examples = ", ".join(repr(text) for text in missing_texts[:2])
+    first_five_missing = ", ".join(repr(text) for text in missing_texts[:5])
+    return (
+        f"Missing lyric syllables: {missing_ids} (e.g., {missing_text_examples})\n"
+        f"First missing syllable texts: [{first_five_missing}]"
+    )
 
 
 def _validate_phrase_barline_alignment(score: CanonicalScore) -> list[str]:

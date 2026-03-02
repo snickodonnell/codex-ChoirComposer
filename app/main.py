@@ -51,6 +51,12 @@ app = FastAPI(title="Choir Composer")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
+class UserFacingValidationError(ValueError):
+    def __init__(self, message: str, diagnostics: list[str]):
+        super().__init__(message)
+        self.diagnostics = diagnostics
+
+
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or new_request_id()
@@ -92,7 +98,7 @@ async def global_exception_handler(_request: Request, exc: Exception):
 
 def _friendly_validation_error(action: str, diagnostics: list[str], level: int = logging.ERROR) -> ValueError:
     log_event(logger, "validation_failed", level=level, action=action, diagnostics=diagnostics)
-    return ValueError(f"{action} could not proceed due to invalid score data.")
+    return UserFacingValidationError(f"{action} could not proceed due to invalid score data.", diagnostics)
 
 
 def _require_score_stage(score, expected_stage: str, action: str) -> None:
@@ -183,12 +189,15 @@ def _log_svg_meta_summary(endpoint: str, artifacts, options: EngravingOptions) -
 
 def _handle_user_error(action: str, exc: ValueError) -> HTTPException:
     log_event(logger, "request_failed", level=logging.WARNING, action=action, reason=str(exc))
+    detail = {
+        "message": f"{action} failed. Please adjust inputs and try again.",
+        "request_id": current_request_id(),
+    }
+    if isinstance(exc, UserFacingValidationError) and exc.diagnostics:
+        detail["diagnostics"] = exc.diagnostics
     return HTTPException(
         status_code=422,
-        detail={
-            "message": f"{action} failed. Please adjust inputs and try again.",
-            "request_id": current_request_id(),
-        },
+        detail=detail,
     )
 
 
@@ -396,6 +405,11 @@ def validate_score_endpoint(payload: HarmonizeRequest):
 @app.post("/api/export-pdf")
 def export_pdf_endpoint(payload: PDFExportRequest):
     request_id = current_request_id()
+    try:
+        _require_valid_score(payload.score, "PDF export")
+    except ValueError as exc:
+        raise _handle_user_error("PDF export", exc) from exc
+
     log_event(
         logger,
         "pdf_export_deprecated",
