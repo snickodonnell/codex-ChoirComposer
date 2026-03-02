@@ -36,6 +36,10 @@ const melodyPreviewZoomEl = document.getElementById('melodyPreviewZoom');
 const satbPreviewZoomEl = document.getElementById('satbPreviewZoom');
 const exportPdfStatusEl = document.getElementById('exportPdfStatus');
 const exportPdfErrorEl = document.getElementById('exportPdfError');
+const melodySheetEl = document.getElementById('melodySheet');
+const satbSheetEl = document.getElementById('satbSheet');
+const melodyInlineNoticeEl = document.getElementById('melodyInlineNotice');
+const satbInlineNoticeEl = document.getElementById('satbInlineNotice');
 
 const formErrorsEl = document.getElementById('formErrors');
 const composerWarningsEl = document.getElementById('composerWarnings');
@@ -43,6 +47,20 @@ const VALID_TONICS = new Set(['C','C#','Db','D','D#','Eb','E','F','F#','Gb','G',
 const VALID_MODES = new Set(['ionian','dorian','phrygian','lydian','mixolydian','aeolian','locrian','major','minor','natural minor']);
 let sectionIdCounter = 0;
 const MAX_DRAFT_VERSIONS = 20;
+const INLINE_STAFF_ENABLED = false;
+const INLINE_RENDER_CODES = {
+  NOT_IMPLEMENTED: 'INLINE_NOT_IMPLEMENTED',
+  DEP_MISSING: 'INLINE_DEP_MISSING',
+  RENDER_THROW: 'INLINE_RENDER_THROW',
+  EMPTY: 'INLINE_EMPTY',
+};
+
+function isInlineStaffEnabled() {
+  if (typeof window !== 'undefined' && typeof window.__INLINE_STAFF_ENABLED_OVERRIDE === 'boolean') {
+    return window.__INLINE_STAFF_ENABLED_OVERRIDE;
+  }
+  return INLINE_STAFF_ENABLED;
+}
 const HYMN_TEST_DATA_SECTIONS = [
   { label: 'Verse', is_verse: true, text: 'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see' },
   { label: 'Verse', is_verse: true, text: "T'was grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed" },
@@ -971,6 +989,9 @@ const isDevMode = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].in
 const pdfExportButtonDefaultLabel = exportPDFBtn?.textContent || 'Download PDF';
 let hasLoggedMelodyGenerationErrorDebug = false;
 
+setInlineSheetVisibility('melody', isInlineStaffEnabled());
+setInlineSheetVisibility('satb', isInlineStaffEnabled());
+
 function getSeedRequestOptions() {
   if (!isDevMode || typeof window === 'undefined') {
     return { seed_strategy: 'random' };
@@ -1089,6 +1110,12 @@ function runVectorPdfImportSelfCheck() {
 runVectorPdfImportSelfCheck();
 
 if (isDevMode && typeof window !== 'undefined') {
+  window.__inlineStaff = {
+    get enabled() {
+      return isInlineStaffEnabled();
+    },
+    codes: INLINE_RENDER_CODES,
+  };
   window.__pdfSelfTest = async () => {
     const byteLength = await runPdfExportSelfCheck();
     console.info('[pdf] self-test passed', { byteLength });
@@ -1177,12 +1204,96 @@ function updateDraftVersionOptions() {
   }
 }
 
-function renderMelody(score, heading = 'Melody') {
+function inlineSheetElements(target) {
+  if (target === 'satb') {
+    return { sheet: satbSheetEl, notice: satbInlineNoticeEl };
+  }
+  return { sheet: melodySheetEl, notice: melodyInlineNoticeEl };
+}
+
+function createInlineRenderStatus(ok, code = null, detail = null) {
+  return {
+    ok,
+    code,
+    detail,
+  };
+}
+
+function classifyInlineRenderError(error) {
+  const detail = String(error?.message || error || 'Inline staff render failed.');
+  const lower = detail.toLowerCase();
+  if (lower.includes('failed to load') || lower.includes('vexflow')) {
+    return createInlineRenderStatus(false, INLINE_RENDER_CODES.DEP_MISSING, detail);
+  }
+  return createInlineRenderStatus(false, INLINE_RENDER_CODES.RENDER_THROW, detail);
+}
+
+function setInlineNotice(target, message = '') {
+  const { notice } = inlineSheetElements(target);
+  if (!notice) return;
+  notice.textContent = message;
+  notice.style.display = message ? 'block' : 'none';
+}
+
+function setInlineSheetVisibility(target, visible) {
+  const { sheet } = inlineSheetElements(target);
+  if (!sheet) return;
+  sheet.style.display = visible ? '' : 'none';
+}
+
+function logInlineRenderDiagnostics(target, functionName, status, context = {}) {
+  if (!isDevMode) return;
+  const rendererLoaded = Boolean(window.Vex?.Flow || window.Vex);
+  console.warn('[inline-staff]', {
+    component: target === 'satb' ? 'SATBDraftSection' : 'MelodyDraftSection',
+    functionName,
+    stack: new Error().stack,
+    status,
+    state: {
+      inlineStaffEnabled: isInlineStaffEnabled(),
+      inlineRendererLoaded: rendererLoaded,
+      inlineSvg: null,
+      inlineError: status?.detail || null,
+      hasScore: context.hasScore ?? null,
+      requestId: context.requestId ?? null,
+    },
+    context,
+  });
+}
+
+function handleInlineRenderResult(target, functionName, status, context = {}) {
+  if (status.ok) {
+    setInlineNotice(target, '');
+    return status;
+  }
+
+  logInlineRenderDiagnostics(target, functionName, status, context);
+  if (!isInlineStaffEnabled() || status.code === INLINE_RENDER_CODES.NOT_IMPLEMENTED) {
+    setInlineNotice(target, '');
+    return status;
+  }
+
+  setInlineNotice(target, 'Inline staff preview is unavailable for this draft. Full preview/playback/export are still available.');
+  return status;
+}
+
+function renderMelodyFrame(score, heading = 'Melody') {
   melodyScore = normalizeScoreForRendering(score);
-  document.getElementById('melodySheet').innerHTML = '';
+  if (melodySheetEl) melodySheetEl.innerHTML = '';
   melodyMeta.textContent = JSON.stringify(melodyScore.meta, null, 2);
   document.getElementById('melodyChords').textContent = formatChordLine(melodyScore);
-  drawStaff('melodySheet', heading, flattenVoice(melodyScore, 'soprano', { includeRests: true }), melodyScore.meta.time_signature);
+  return {
+    score: melodyScore,
+    heading,
+  };
+}
+
+function renderMelody(score, heading = 'Melody') {
+  const frame = renderMelodyFrame(score, heading);
+  drawStaff('melodySheet', frame.heading, flattenVoice(frame.score, 'soprano', { includeRests: true }), frame.score.meta.time_signature);
+  if (!(melodySheetEl?.innerHTML || '').trim()) {
+    throw new Error('Inline melody staff returned empty output.');
+  }
   refreshPreview('melody');
 }
 
@@ -1390,35 +1501,57 @@ async function refreshPreview(target) {
 }
 
 
-function renderSatb(score, harmonizationNotes = null, heading = 'SATB') {
+function renderSatbFrame(score, harmonizationNotes = null) {
   satbScore = normalizeScoreForRendering(score);
   satbMeta.textContent = JSON.stringify({
     ...satbScore.meta,
     harmonization: harmonizationNotes || 'Chord-led SATB voicing with diatonic progression integrity checks.',
   }, null, 2);
   document.getElementById('satbChords').textContent = formatChordLine(satbScore);
-  document.getElementById('satbSheet').innerHTML = '';
+  if (satbSheetEl) satbSheetEl.innerHTML = '';
+  return satbScore;
+}
 
-  ['soprano', 'alto', 'tenor', 'bass'].forEach((v) => drawStaff('satbSheet', heading === 'SATB' ? v.toUpperCase() : `${heading} · ${v.toUpperCase()}`, flattenVoice(satbScore, v, { includeRests: true }), satbScore.meta.time_signature));
+function renderSatb(score, harmonizationNotes = null, heading = 'SATB') {
+  const normalized = renderSatbFrame(score, harmonizationNotes);
+
+  ['soprano', 'alto', 'tenor', 'bass'].forEach((v) => drawStaff('satbSheet', heading === 'SATB' ? v.toUpperCase() : `${heading} · ${v.toUpperCase()}`, flattenVoice(normalized, v, { includeRests: true }), normalized.meta.time_signature));
+  if (!(satbSheetEl?.innerHTML || '').trim()) {
+    throw new Error('Inline SATB staff returned empty output.');
+  }
   refreshPreview('satb');
 }
 
-function safeRenderSatb(score, harmonizationNotes, heading = 'SATB') {
+function safeRenderSatb(score, harmonizationNotes, heading = 'SATB', context = {}) {
+  if (!isInlineStaffEnabled()) {
+    renderSatbFrame(score, harmonizationNotes);
+    setInlineSheetVisibility('satb', false);
+    refreshPreview('satb');
+    return handleInlineRenderResult('satb', 'safeRenderSatb', createInlineRenderStatus(false, INLINE_RENDER_CODES.NOT_IMPLEMENTED, 'Inline SATB staff is disabled for MVP.'), {
+      ...context,
+      hasScore: Boolean(score),
+    });
+  }
+
+  setInlineSheetVisibility('satb', true);
   try {
     renderSatb(score, harmonizationNotes, heading);
-    return true;
-  } catch (_) {
+    return handleInlineRenderResult('satb', 'safeRenderSatb', createInlineRenderStatus(true), { ...context, hasScore: Boolean(score) });
+  } catch (firstError) {
     try {
       renderSatb(normalizeScoreForRendering(score), harmonizationNotes, heading);
-      return true;
-    } catch (_) {
-      showErrors(['SATB generated. Inline staff view is unavailable, but preview/playback/export still work.']);
-      return false;
+      return handleInlineRenderResult('satb', 'safeRenderSatb', createInlineRenderStatus(true), { ...context, hasScore: Boolean(score), fallbackNormalizationUsed: true });
+    } catch (secondError) {
+      return handleInlineRenderResult('satb', 'safeRenderSatb', classifyInlineRenderError(secondError), {
+        ...context,
+        hasScore: Boolean(score),
+        firstError: String(firstError?.message || firstError),
+      });
     }
   }
 }
 
-function appendSatbDraftVersion(score, harmonizationNotes, label, melodyVersionId = activeMelodyVersionId()) {
+function appendSatbDraftVersion(score, harmonizationNotes, label, melodyVersionId = activeMelodyVersionId(), context = {}) {
   if (!melodyVersionId) {
     showErrors(['Generate or select a melody draft before creating SATB drafts.']);
     return;
@@ -1437,7 +1570,7 @@ function appendSatbDraftVersion(score, harmonizationNotes, label, melodyVersionI
   satbDraftVersionsByMelodyVersion.set(melodyVersionId, capped);
   activeSatbDraftVersionId = version.id;
   stopPlayback('satb');
-  safeRenderSatb(score, harmonizationNotes, label);
+  safeRenderSatb(score, harmonizationNotes, label, context);
   updateSatbDraftVersionOptions();
 }
 
@@ -1475,6 +1608,7 @@ async function regenerateActiveMelody() {
   };
 
   const res = await post('/api/regenerate-melody', payload);
+  const requestId = getRequestIdFromHeaders(res.headers);
   const melodyPayload = await res.json();
   logSeedMetadata(melodyPayload, 'regenerate-melody');
   const score = melodyPayload.score;
@@ -1483,7 +1617,7 @@ async function regenerateActiveMelody() {
     responsePayload: melodyPayload,
     score,
     applyDraft: () => {
-      appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)');
+      appendDraftVersion(score, currentVersion?.sectionClusterMap || {}, 'Melody (regenerated)', { requestId });
       resetSatbStage();
       updateActionAvailability();
     },
@@ -1503,6 +1637,7 @@ async function regenerateActiveSatb() {
   };
 
   const res = await post('/api/regenerate-satb', payload);
+  const requestId = getRequestIdFromHeaders(res.headers);
   const responsePayload = await res.json();
   await applyDraftResult({
     endpoint: '/api/regenerate-satb',
@@ -1513,13 +1648,15 @@ async function regenerateActiveSatb() {
         responsePayload.score,
         responsePayload.harmonization_notes,
         'SATB (regenerated)',
+        activeMelodyVersionId(),
+        { requestId },
       );
       updateActionAvailability();
     },
   });
 }
 
-function appendDraftVersion(score, sectionClusterMap, label) {
+function appendDraftVersion(score, sectionClusterMap, label, context = {}) {
   const version = {
     id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     score,
@@ -1532,7 +1669,7 @@ function appendDraftVersion(score, sectionClusterMap, label) {
   }
   activeDraftVersionId = version.id;
   stopPlayback('melody');
-  safeRenderMelody(score, label);
+  safeRenderMelody(score, label, context);
   updateDraftVersionOptions();
 }
 
@@ -1736,7 +1873,7 @@ function loadHymnTestData() {
   activeSatbDraftVersionId = null;
   stopActivePlayback();
   document.getElementById('melodySheet').innerHTML = '';
-  document.getElementById('satbSheet').innerHTML = '';
+  if (satbSheetEl) satbSheetEl.innerHTML = '';
   document.getElementById('melodyChords').textContent = formatChordLine(null);
   document.getElementById('satbChords').textContent = formatChordLine(null);
   melodyMeta.textContent = '';
@@ -2248,17 +2385,31 @@ function updateActionAvailability() {
   updateWorkflowStatus();
 }
 
-function safeRenderMelody(score, heading) {
+function safeRenderMelody(score, heading, context = {}) {
+  if (!isInlineStaffEnabled()) {
+    renderMelodyFrame(score, heading);
+    setInlineSheetVisibility('melody', false);
+    refreshPreview('melody');
+    return handleInlineRenderResult('melody', 'safeRenderMelody', createInlineRenderStatus(false, INLINE_RENDER_CODES.NOT_IMPLEMENTED, 'Inline melody staff is disabled for MVP.'), {
+      ...context,
+      hasScore: Boolean(score),
+    });
+  }
+
+  setInlineSheetVisibility('melody', true);
   try {
     renderMelody(score, heading);
-    return true;
-  } catch (_) {
+    return handleInlineRenderResult('melody', 'safeRenderMelody', createInlineRenderStatus(true), { ...context, hasScore: Boolean(score) });
+  } catch (firstError) {
     try {
       renderMelody(normalizeScoreForRendering(score), heading);
-      return true;
-    } catch (_) {
-      showErrors(['Melody generated. Inline staff view is unavailable, but preview/playback/export still work.']);
-      return false;
+      return handleInlineRenderResult('melody', 'safeRenderMelody', createInlineRenderStatus(true), { ...context, hasScore: Boolean(score), fallbackNormalizationUsed: true });
+    } catch (secondError) {
+      return handleInlineRenderResult('melody', 'safeRenderMelody', classifyInlineRenderError(secondError), {
+        ...context,
+        hasScore: Boolean(score),
+        firstError: String(firstError?.message || firstError),
+      });
     }
   }
 }
@@ -2272,7 +2423,7 @@ function resetSatbStage({ clearHistory = false } = {}) {
   }
   satbMeta.textContent = '';
   document.getElementById('satbChords').textContent = formatChordLine(null);
-  document.getElementById('satbSheet').innerHTML = '';
+  if (satbSheetEl) satbSheetEl.innerHTML = '';
   clearPreview('satb');
   updateSatbDraftVersionOptions();
   updateActionAvailability();
@@ -2286,7 +2437,7 @@ function syncSatbStageForActiveMelody() {
   }
   const preferred = satbVersions.find((version) => version.id === activeSatbDraftVersionId) || satbVersions[satbVersions.length - 1];
   activeSatbDraftVersionId = preferred.id;
-  safeRenderSatb(preferred.score, preferred.harmonizationNotes, preferred.label);
+  safeRenderSatb(preferred.score, preferred.harmonizationNotes, preferred.label, { source: 'syncSatbStageForActiveMelody' });
   updateSatbDraftVersionOptions();
   updateActionAvailability();
 }
@@ -2333,9 +2484,10 @@ generateMelodyBtn.onclick = async () => {
     responsePayload: melodyPayload,
     score,
     applyDraft: () => {
+      const requestId = getRequestIdFromHeaders(res.headers);
       melodyDraftVersions = [];
       activeDraftVersionId = null;
-      appendDraftVersion(score, sectionClusterMap, 'Melody');
+      appendDraftVersion(score, sectionClusterMap, 'Melody', { requestId });
       resetSatbStage({ clearHistory: true });
       updateActionAvailability();
     },
@@ -2350,7 +2502,7 @@ draftVersionSelectEl.onchange = () => {
   if (!version) return;
   activeDraftVersionId = version.id;
   stopPlayback('melody');
-  safeRenderMelody(version.score, version.label);
+  safeRenderMelody(version.score, version.label, { source: 'draftVersionSelect' });
   syncSatbStageForActiveMelody();
 };
 
@@ -2404,13 +2556,14 @@ generateSATBBtn.onclick = async () => {
     return;
   }
   const res = await post('/api/generate-satb', { score: melodyScore });
+  const requestId = getRequestIdFromHeaders(res.headers);
   const payload = await res.json();
   await applyDraftResult({
     endpoint: '/api/generate-satb',
     responsePayload: payload,
     score: payload.score,
     applyDraft: () => {
-      appendSatbDraftVersion(payload.score, payload.harmonization_notes, 'SATB');
+      appendSatbDraftVersion(payload.score, payload.harmonization_notes, 'SATB', activeMelodyVersionId(), { requestId });
       updateActionAvailability();
     },
   });
@@ -2424,7 +2577,7 @@ satbDraftVersionSelectEl.onchange = () => {
   if (!version) return;
   activeSatbDraftVersionId = version.id;
   stopPlayback('satb');
-  safeRenderSatb(version.score, version.harmonizationNotes, version.label);
+  safeRenderSatb(version.score, version.harmonizationNotes, version.label, { source: 'satbDraftVersionSelect' });
   updateActionAvailability();
 };
 
