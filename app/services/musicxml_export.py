@@ -436,7 +436,9 @@ def _section_structure_signatures(score: CanonicalScore) -> dict[str, tuple]:
 
 
 def _lyric_xml(note, verse_index: int) -> list[str]:
-    should_emit = bool(note.lyric) or note.lyric_mode in {"melisma_start", "melisma_continue", "tie_start", "tie_continue"}
+    has_text = bool(note.lyric)
+    starts_extension = note.lyric_mode == "melisma_start"
+    should_emit = has_text or starts_extension
     if not should_emit:
         return []
 
@@ -444,9 +446,9 @@ def _lyric_xml(note, verse_index: int) -> list[str]:
     syllabic = _lyric_syllabic(note.lyric_mode)
     if syllabic:
         lines.append(f"          <syllabic>{syllabic}</syllabic>")
-    if note.lyric:
+    if has_text:
         lines.append(f"          <text>{_escape_xml(note.lyric)}</text>")
-    if note.lyric_mode in {"melisma_start", "melisma_continue", "tie_start", "tie_continue"}:
+    if starts_extension:
         lines.append("          <extend/>")
     lines.append("        </lyric>")
     return lines

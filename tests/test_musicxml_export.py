@@ -288,3 +288,39 @@ def test_export_musicxml_hymn_layout_supports_pickup_multiverse_and_section_brea
     assert _measure_count("sec-1") == 16
     assert _measure_count("sec-3") == 16
     assert _measure_count("sec-4") == 16
+
+
+def test_lyric_xml_skips_empty_continuation_events():
+    note = ScoreNote(
+        pitch="C4",
+        beats=1.0,
+        is_rest=False,
+        lyric=None,
+        lyric_syllable_id="sec-1-a",
+        lyric_mode="melisma_continue",
+        section_id="sec-1",
+        lyric_index=0,
+    )
+
+    from app.services.musicxml_export import _lyric_xml
+
+    assert _lyric_xml(note, 1) == []
+
+
+def test_lyric_xml_starts_melisma_extension_without_consuming_next_syllable():
+    note = ScoreNote(
+        pitch="C4",
+        beats=1.0,
+        is_rest=False,
+        lyric="a",
+        lyric_syllable_id="sec-1-a",
+        lyric_mode="melisma_start",
+        section_id="sec-1",
+        lyric_index=0,
+    )
+
+    from app.services.musicxml_export import _lyric_xml
+
+    xml_lines = _lyric_xml(note, 1)
+    assert any("<text>a</text>" in line for line in xml_lines)
+    assert any("<extend/>" in line for line in xml_lines)

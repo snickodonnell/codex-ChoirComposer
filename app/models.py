@@ -325,6 +325,7 @@ class EngravingPreviewResponse(BaseModel):
     svg_meta: list[SvgMeta] = Field(default_factory=list)
     svg_hash: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    lyric_debug_comparison: dict[str, object] | None = None
 
 
 class EngravingPagesRequest(BaseModel):
