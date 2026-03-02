@@ -701,3 +701,80 @@ def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
                 browser.close()
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+def test_boundary_transition_timing_applies_run_on_and_breath_for_pickup_sections():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                result = page.evaluate(
+                    """
+                    () => {
+                      const score = {
+                        meta: {
+                          tempo_bpm: 60,
+                          arrangement_transitions: [{ transition_mode: 'manual', breath_beats: 1, run_on_beats: 2 }],
+                          boundary_plans: [{
+                            sectionA_id: 'A',
+                            sectionB_id: 'B',
+                            breath_beats_effective: 1,
+                            run_on_beats_effective: 2,
+                          }],
+                        },
+                      };
+                      const events = [
+                        { pitches: ['C4'], beats: 4, seconds: 4, sectionId: 'A', isRest: false, hasLyric: true },
+                        { pitches: ['REST'], beats: 2, seconds: 2, sectionId: 'A', isRest: true, hasLyric: false },
+                        { pitches: ['D4'], beats: 1, seconds: 1, sectionId: 'B', isRest: false, hasLyric: true },
+                      ];
+                      const assembled = buildTimedPlaybackEvents(events, score, 1);
+                      const transitionEvents = (window.playbackEventLog || []).filter((entry) => entry.event === 'boundary_transition_applied');
+                      return {
+                        bStartSeconds: assembled.timedEvents[2].time,
+                        transitionEvent: transitionEvents[transitionEvents.length - 1] || null,
+                      };
+                    }
+                    """
+                )
+
+                assert result["bStartSeconds"] == 5
+                assert result["transitionEvent"]["run_on_beats"] == 2
+                assert result["transitionEvent"]["breath_beats"] == 1
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+def test_boundary_transition_legacy_gap_is_unchanged_when_transitions_are_absent():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                result = page.evaluate(
+                    """
+                    () => {
+                      const score = { meta: { tempo_bpm: 60, arrangement_transitions: [], boundary_plans: [] } };
+                      const events = [
+                        { pitches: ['C4'], beats: 4, seconds: 4, sectionId: 'A', isRest: false, hasLyric: true },
+                        { pitches: ['D4'], beats: 1, seconds: 1, sectionId: 'B', isRest: false, hasLyric: true },
+                      ];
+                      const assembled = buildTimedPlaybackEvents(events, score, 1);
+                      return assembled.timedEvents[1].time;
+                    }
+                    """
+                )
+
+                assert result == 5
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")

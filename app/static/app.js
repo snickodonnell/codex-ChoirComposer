@@ -2512,24 +2512,81 @@ draftVersionSelectEl.onchange = () => {
   syncSatbStageForActiveMelody();
 };
 
-function buildTimedPlaybackEvents(events, pauseSeconds) {
-  let cursor = 0;
+function _isLyricBearing(event) {
+  return Boolean(event && !event.isRest && event.hasLyric);
+}
+
+function _maxSafeRunOnBeats(sectionEvents) {
+  let safeTailBeats = 0;
+  for (let idx = sectionEvents.length - 1; idx >= 0; idx -= 1) {
+    const event = sectionEvents[idx];
+    if (_isLyricBearing(event)) {
+      break;
+    }
+    safeTailBeats += event.beats || 0;
+  }
+  return safeTailBeats;
+}
+
+function _findBoundaryPlan(score, sectionAId, sectionBId) {
+  const plans = score?.meta?.boundary_plans;
+  if (!Array.isArray(plans)) return null;
+  return plans.find((plan) => plan.sectionA_id === sectionAId && plan.sectionB_id === sectionBId) || null;
+}
+
+function _hasTransitionModes(score) {
+  const transitions = score?.meta?.arrangement_transitions;
+  return Array.isArray(transitions) && transitions.some((transition) => transition && transition.transition_mode);
+}
+
+function buildTimedPlaybackEvents(events, score, pauseSeconds) {
+  let cursorBeats = 0;
   let previousSectionId = null;
+  let currentSectionEvents = [];
+  const secondsPerBeat = 60 / score.meta.tempo_bpm;
+  const pauseBeats = pauseSeconds / secondsPerBeat;
+  const useTransitions = _hasTransitionModes(score);
   const timedEvents = events.map((event) => {
     const currentSectionId = event.sectionId && event.sectionId !== 'padding' ? event.sectionId : previousSectionId;
     if (previousSectionId && currentSectionId && currentSectionId !== previousSectionId) {
-      cursor += pauseSeconds;
+      if (useTransitions) {
+        const boundaryPlan = _findBoundaryPlan(score, previousSectionId, currentSectionId);
+        if (boundaryPlan) {
+          const requestedRunOn = Math.max(0, Number(boundaryPlan.run_on_beats_effective || 0));
+          const breathBeats = Math.max(0, Number(boundaryPlan.breath_beats_effective || 0));
+          const safeRunOn = _maxSafeRunOnBeats(currentSectionEvents);
+          const finalRunOn = Math.min(requestedRunOn, safeRunOn);
+          const clamped = finalRunOn + 1e-9 < requestedRunOn;
+          const sectionAEnd = cursorBeats;
+          const sectionBStart = Math.max(0, sectionAEnd - finalRunOn + breathBeats);
+          emitPlaybackLog('boundary_transition_applied', {
+            sectionA: previousSectionId,
+            sectionB: currentSectionId,
+            run_on_beats: Number(finalRunOn.toFixed(6)),
+            breath_beats: Number(breathBeats.toFixed(6)),
+            clamped,
+            start_offset_A_end_beats: Number(sectionAEnd.toFixed(6)),
+            start_offset_B_beats: Number(sectionBStart.toFixed(6)),
+          });
+          cursorBeats = sectionBStart;
+        } else {
+          cursorBeats += pauseBeats;
+        }
+      } else {
+        cursorBeats += pauseBeats;
+      }
+      currentSectionEvents = [];
     }
-    const current = { pitches: event.pitches, seconds: event.seconds, time: cursor };
-    cursor += event.seconds;
+    const current = { pitches: event.pitches, seconds: event.seconds, time: cursorBeats * secondsPerBeat };
+    cursorBeats += event.beats;
     previousSectionId = currentSectionId || previousSectionId;
+    currentSectionEvents.push(event);
     return current;
   });
-  return { timedEvents, totalSeconds: cursor };
+  return { timedEvents, totalSeconds: cursorBeats * secondsPerBeat };
 }
 
-function arrangementPauseSeconds(score) {
-  void score;
+function arrangementPauseSeconds(_score) {
   return 1;
 }
 
@@ -2540,10 +2597,13 @@ startMelodyBtn.onclick = async () => {
   }
   const events = flattenVoice(melodyScore, 'soprano').map((n) => ({
     pitches: [n.pitch],
+    beats: n.beats,
     seconds: (60 / melodyScore.meta.tempo_bpm) * n.beats,
     sectionId: n.section_id,
+    isRest: Boolean(n.is_rest),
+    hasLyric: Boolean(n.lyric && String(n.lyric).trim()),
   }));
-  const { timedEvents, totalSeconds } = buildTimedPlaybackEvents(events, arrangementPauseSeconds(melodyScore));
+  const { timedEvents, totalSeconds } = buildTimedPlaybackEvents(events, melodyScore, arrangementPauseSeconds(melodyScore));
   await startPlayback({
     id: `melody:${activeDraftVersionId || 'current'}:${fingerprintNotes(events)}:${melodyScore.meta.tempo_bpm}:gap1bar`,
     type: 'melody',
@@ -2598,10 +2658,13 @@ startSATBBtn.onclick = async () => {
   const bass = flattenVoice(satbScore, 'bass');
   const chordEvents = soprano.map((sn, i) => ({
     pitches: [sn.pitch, alto[i]?.pitch, tenor[i]?.pitch, bass[i]?.pitch].filter(Boolean),
+    beats: sn.beats,
     seconds: (60 / satbScore.meta.tempo_bpm) * sn.beats,
     sectionId: sn.section_id,
+    isRest: Boolean(sn.is_rest),
+    hasLyric: Boolean(sn.lyric && String(sn.lyric).trim()),
   }));
-  const { timedEvents, totalSeconds } = buildTimedPlaybackEvents(chordEvents, arrangementPauseSeconds(satbScore));
+  const { timedEvents, totalSeconds } = buildTimedPlaybackEvents(chordEvents, satbScore, arrangementPauseSeconds(satbScore));
   await startPlayback({
     id: `satb:${activeSatbDraftVersionId || 'current'}:${fingerprintNotes(chordEvents)}:${satbScore.meta.tempo_bpm}:gap1bar`,
     type: 'satb',
