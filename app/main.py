@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 
@@ -35,6 +36,7 @@ from app.models import (
     SATBResponse,
 )
 from app.services.composer import MelodyGenerationFailedError, generate_melody_score, harmonize_score, regenerate_score, resolve_generation_seed
+from app.services.lyric_debug_report import build_lyric_underlay_report
 from app.services.musicxml_export import export_musicxml
 from app.services.engraving_preview import DEFAULT_LAYOUT, EngravingLayoutConfig, EngravingOptions, build_verovio_options, preview_service
 from app.services.pdf_deps import check_pdf_export_capabilities
@@ -43,6 +45,7 @@ from app.services.score_validation import validate_score, validate_score_diagnos
 
 configure_logging()
 logger = logging.getLogger(__name__)
+DEBUG_MODE = os.getenv("DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI(title="Choir Composer")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -232,7 +235,24 @@ def generate_melody_endpoint(payload: CompositionRequest):
         seed_strategy_used, seed_used = resolve_generation_seed(payload)
         score = normalize_score_for_rendering(generate_melody_score(payload.model_copy(update={"seed": seed_used})))
         warnings = _evaluate_melody_validation_gate(score)
-        return MelodyResponse(score=score, warnings=warnings, seed_strategy_used=seed_strategy_used, seed_used=seed_used)
+        lyric_underlay_report = None
+        if DEBUG_MODE:
+            lyric_underlay_report = build_lyric_underlay_report(score)
+            summary = lyric_underlay_report.get("summary", {}) if isinstance(lyric_underlay_report, dict) else {}
+            log_event(
+                logger,
+                "lyric_underlay_report_summary",
+                missing=summary.get("missing", 0),
+                dupes=summary.get("dupes", 0),
+                out_of_order=summary.get("out_of_order", 0),
+            )
+        return MelodyResponse(
+            score=score,
+            warnings=warnings,
+            seed_strategy_used=seed_strategy_used,
+            seed_used=seed_used,
+            lyric_underlay_report=lyric_underlay_report,
+        )
     except MelodyGenerationFailedError as exc:
         log_event(
             logger,

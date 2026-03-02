@@ -716,6 +716,30 @@ def test_amazing_grace_default_random_generation_does_not_repeat_same_warning_pr
     assert len({count for _seed, count in recurring_profiles}) >= 2
 
 
+def test_generate_melody_debug_lyric_underlay_report_is_present_and_well_formed(monkeypatch):
+    monkeypatch.setattr(main_module, "DEBUG_MODE", True)
+
+    res = client.post("/api/generate-melody", json=_amazing_grace_payload(seed_strategy="stable"))
+
+    assert res.status_code == 200
+    payload = res.json()
+    report = payload.get("lyric_underlay_report")
+    assert isinstance(report, dict)
+    assert isinstance(report.get("summary"), dict)
+    assert {"missing", "dupes", "out_of_order"}.issubset(report["summary"].keys())
+
+    sections = report.get("sections")
+    assert isinstance(sections, list)
+    assert sections
+    for section_report in sections:
+        assert isinstance(section_report.get("tokenized_syllables"), list)
+        assert isinstance(section_report.get("lyric_note_events"), list)
+        assert isinstance(section_report.get("missing_syllable_ids"), list)
+        assert isinstance(section_report.get("duplicate_syllable_ids"), list)
+        assert isinstance(section_report.get("out_of_order_pairs"), list)
+        assert isinstance(section_report.get("overwritten_events"), list)
+
+
 def test_arrangement_transitions_round_trip_to_score_meta():
     payload = {
         "sections": [

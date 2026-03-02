@@ -261,6 +261,7 @@ class MelodyResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     seed_strategy_used: SeedStrategy
     seed_used: str
+    lyric_underlay_report: dict[str, object] | None = None
 
 
 class RegenerateRequest(BaseModel):
