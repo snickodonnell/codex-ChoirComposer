@@ -68,6 +68,8 @@ const HYMN_TEST_DATA_SECTIONS = [
 ];
 const HYMN_TEST_DATA_ANACRUSIS_MODE = 'manual';
 const HYMN_TEST_DATA_ANACRUSIS_BEATS = 2;
+const DEFAULT_TRANSITION_MODE = 'off';
+const HYMN_TEST_DATA_TRANSITION_MODE = 'auto';
 let melodyDraftVersions = [];
 let activeDraftVersionId = null;
 let satbDraftVersionsByMelodyVersion = new Map();
@@ -1785,7 +1787,40 @@ function getArrangementItemPhraseBlocks(item) {
     .filter((block) => block.text.trim().length > 0);
 }
 
-function addArrangementItem(sectionId, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0) {
+function refreshArrangementTransitionUI(item) {
+  const arrangementItems = [...arrangementListEl.querySelectorAll('.arrangement-item')];
+  const idx = arrangementItems.indexOf(item);
+  const isLast = idx === arrangementItems.length - 1;
+  const modeSelect = item.querySelector('.arrangement-transition-mode');
+  const runOnInput = item.querySelector('.arrangement-transition-run-on-beats');
+  const breathInput = item.querySelector('.arrangement-transition-breath-beats');
+  const boundaryLabel = item.querySelector('.arrangement-transition-boundary-label');
+  const transitionGroup = item.querySelector('.arrangement-transition-controls');
+  if (!modeSelect || !runOnInput || !breathInput || !boundaryLabel || !transitionGroup) return;
+
+  const sectionA = describeSection(item.dataset.sectionId);
+  const nextItem = item.nextElementSibling;
+  const sectionB = nextItem?.classList.contains('arrangement-item') ? describeSection(nextItem.dataset.sectionId) : '';
+  const mode = modeSelect.value || DEFAULT_TRANSITION_MODE;
+  const manualMode = mode === 'manual';
+
+  if (isLast || !sectionB) {
+    transitionGroup.style.display = 'none';
+    modeSelect.disabled = true;
+    runOnInput.disabled = true;
+    breathInput.disabled = true;
+    boundaryLabel.textContent = 'No following section boundary.';
+    return;
+  }
+
+  transitionGroup.style.display = '';
+  modeSelect.disabled = false;
+  runOnInput.disabled = !manualMode;
+  breathInput.disabled = mode === 'off';
+  boundaryLabel.textContent = `Boundary: ${sectionA} → ${sectionB}`;
+}
+
+function addArrangementItem(sectionId, phraseBlocks = null, anacrusisMode = "off", anacrusisBeats = 0, transitionMode = DEFAULT_TRANSITION_MODE, transitionBreathBeats = null, transitionRunOnBeats = null) {
   if (!sectionId) return;
   const section = getSectionLibrary().find((entry) => entry.id === sectionId);
   const resolvedPhraseBlocks = phraseBlocks || derivePhraseBlocksFromText(section?.text || '');
@@ -1807,6 +1842,23 @@ function addArrangementItem(sectionId, phraseBlocks = null, anacrusisMode = "off
       </label>
       <div class="arrangement-anacrusis-help">Pickup creates a short first bar for this section instance; phrase ends still align to barlines.</div>
       <div class="arrangement-anacrusis-recommendation"></div>
+      <div class="arrangement-transition-controls">
+        <div class="arrangement-transition-boundary-label"></div>
+        <label>Run-on / Elision
+          <select class="arrangement-transition-mode" title="Run-on overlaps the next pickup into the previous ending and preserves a breath.">
+            <option value="auto">Auto</option>
+            <option value="off">Off</option>
+            <option value="manual">Manual</option>
+          </select>
+        </label>
+        <label>Run-on beats
+          <input class="arrangement-transition-run-on-beats" type="number" min="0" max="4" step="0.25" value="1" disabled />
+        </label>
+        <label>Breath beats
+          <input class="arrangement-transition-breath-beats" type="number" min="0" max="4" step="0.25" value="1" />
+        </label>
+        <div class="arrangement-transition-help">Run-on overlaps the next pickup into the previous ending and preserves a breath.</div>
+      </div>
       <div class="arrangement-phrase-blocks"></div>
     </div>
     <div class="arrangement-item-controls">
@@ -1819,8 +1871,14 @@ function addArrangementItem(sectionId, phraseBlocks = null, anacrusisMode = "off
   renderPhraseBlocksEditor(item, resolvedPhraseBlocks);
   const modeSelect = item.querySelector('.arrangement-anacrusis-mode');
   const beatsInput = item.querySelector('.arrangement-anacrusis-beats');
+  const transitionModeSelect = item.querySelector('.arrangement-transition-mode');
+  const transitionBreathInput = item.querySelector('.arrangement-transition-breath-beats');
+  const transitionRunOnInput = item.querySelector('.arrangement-transition-run-on-beats');
   if (modeSelect) modeSelect.value = anacrusisMode || 'off';
   if (beatsInput) beatsInput.value = Number(anacrusisBeats) || 0;
+  if (transitionModeSelect) transitionModeSelect.value = transitionMode || DEFAULT_TRANSITION_MODE;
+  if (transitionBreathInput) transitionBreathInput.value = transitionBreathBeats == null ? 1 : Number(transitionBreathBeats) || 0;
+  if (transitionRunOnInput) transitionRunOnInput.value = transitionRunOnBeats == null ? 1 : Number(transitionRunOnBeats) || 0;
   refreshArrangementAnacrusisUI(item);
   refreshArrangementLabels();
 }
@@ -1837,6 +1895,7 @@ function refreshArrangementLabels() {
     } else {
       meta.textContent = `${idx + 1}. ${describeSection(item.dataset.sectionId)}`;
     }
+    refreshArrangementTransitionUI(item);
   });
   refreshRegenerateClusterOptions();
 }
@@ -1853,9 +1912,9 @@ function loadHymnTestData() {
   HYMN_TEST_DATA_SECTIONS.forEach((section) => addSectionRow(section.label, section.text, section.is_verse || false));
 
   const rows = getSectionRows();
-  addArrangementItem(rows[0]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS);
-  addArrangementItem(rows[1]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS);
-  addArrangementItem(rows[2]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS);
+  addArrangementItem(rows[0]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS, HYMN_TEST_DATA_TRANSITION_MODE);
+  addArrangementItem(rows[1]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS, HYMN_TEST_DATA_TRANSITION_MODE);
+  addArrangementItem(rows[2]?.dataset.sectionId, null, HYMN_TEST_DATA_ANACRUSIS_MODE, HYMN_TEST_DATA_ANACRUSIS_BEATS, HYMN_TEST_DATA_TRANSITION_MODE);
 
   document.getElementById('key').value = 'G';
   document.getElementById('primaryMode').value = 'major';
@@ -1990,6 +2049,10 @@ arrangementListEl.addEventListener('input', (event) => {
     const arrangementItem = target.closest('.arrangement-item');
     if (arrangementItem) refreshArrangementAnacrusisUI(arrangementItem);
   }
+  if (target.classList.contains('arrangement-transition-mode') || target.classList.contains('arrangement-transition-breath-beats') || target.classList.contains('arrangement-transition-run-on-beats')) {
+    const arrangementItem = target.closest('.arrangement-item');
+    if (arrangementItem) refreshArrangementTransitionUI(arrangementItem);
+  }
 });
 
 function collectPayload() {
@@ -2005,11 +2068,21 @@ function collectPayload() {
     anacrusis_beats: Number(item.querySelector('.arrangement-anacrusis-beats')?.value) || 0,
     phrase_blocks: getArrangementItemPhraseBlocks(item),
   }));
-  const arrangementTransitions = Array.from({ length: Math.max(0, arrangement.length - 1) }, () => ({
-    transition_mode: 'auto',
-    breath_beats: null,
-    run_on_beats: null,
-  }));
+  const arrangementTransitions = [...arrangementListEl.querySelectorAll('.arrangement-item')]
+    .slice(0, Math.max(0, arrangement.length - 1))
+    .map((item) => {
+      const mode = item.querySelector('.arrangement-transition-mode')?.value || DEFAULT_TRANSITION_MODE;
+      const breathValue = item.querySelector('.arrangement-transition-breath-beats')?.value;
+      const runOnValue = item.querySelector('.arrangement-transition-run-on-beats')?.value;
+      const parsedBreath = breathValue == null || breathValue === '' ? null : Math.max(0, Number(breathValue));
+      const parsedRunOn = runOnValue == null || runOnValue === '' ? null : Math.max(0, Number(runOnValue));
+
+      return {
+        transition_mode: mode,
+        breath_beats: mode === 'off' ? 0 : parsedBreath,
+        run_on_beats: mode === 'manual' ? parsedRunOn : null,
+      };
+    });
 
   if (!sectionLibrary.length) {
     errors.push(createValidationIssue('Please add lyrics to at least one section before generating a melody.', sectionsCard));
@@ -2025,6 +2098,14 @@ function collectPayload() {
 
   if (arrangement.some((item) => !item.phrase_blocks.length)) {
     errors.push(createValidationIssue('Each arrangement item must include at least one phrase block.', arrangementCard));
+  }
+
+  if (arrangementTransitions.some((transition) => transition.transition_mode !== 'off' && transition.breath_beats != null && Number.isNaN(transition.breath_beats))) {
+    errors.push(createValidationIssue('Each enabled boundary transition must use a valid Breath beats value.', arrangementCard));
+  }
+
+  if (arrangementTransitions.some((transition) => transition.transition_mode === 'manual' && (transition.run_on_beats == null || Number.isNaN(transition.run_on_beats)))) {
+    errors.push(createValidationIssue('Manual boundary transitions must include a valid Run-on beats value.', arrangementCard));
   }
 
   if (!arrangement.length) {
