@@ -1739,6 +1739,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
             stage="melody",
             rationale="Deterministic lyric-to-rhythm mapping with section-wise diatonic chord progression as harmonic authority.",
             arrangement_music_units=arrangement_music_units,
+            arrangement_transitions=req.arrangement_transitions,
             verse_music_unit_form=verse_music_unit_form,
         ),
         sections=sections,
@@ -1836,6 +1837,7 @@ def _derive_seed_from_inputs(req: CompositionRequest, nonce: str | None = None) 
         "sections": [section.model_dump() for section in req.sections],
         "arrangement": [item.model_dump() for item in req.arrangement],
         "preferences": req.preferences.model_dump(),
+        "arrangement_transitions": [item.model_dump() for item in req.arrangement_transitions],
     }
     raw = json.dumps(seed_payload, sort_keys=True, separators=(",", ":"))
     if nonce:

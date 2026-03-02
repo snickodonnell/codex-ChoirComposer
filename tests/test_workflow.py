@@ -641,3 +641,61 @@ def test_amazing_grace_default_random_generation_does_not_repeat_same_warning_pr
 
     assert len({seed for seed, _ in recurring_profiles}) == 4
     assert len({count for _seed, count in recurring_profiles}) >= 2
+
+
+def test_arrangement_transitions_round_trip_to_score_meta():
+    payload = {
+        "sections": [
+            {"id": "v1", "label": "Verse", "is_verse": True, "text": "Morning light renews us"},
+            {"id": "c1", "label": "Chorus", "is_verse": False, "text": "Sing with joy together"},
+            {"id": "v2", "label": "Verse", "is_verse": True, "text": "Grace will lead us home"},
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True},
+            {"section_id": "c1", "is_verse": False},
+            {"section_id": "v2", "is_verse": True},
+        ],
+        "arrangement_transitions": [
+            {"transition_mode": "manual", "breath_beats": 1, "run_on_beats": 0.5},
+            {"transition_mode": "off", "breath_beats": 0, "run_on_beats": 2},
+        ],
+        "preferences": {"key": "C", "time_signature": "4/4", "tempo_bpm": 88},
+        "seed_strategy": "stable",
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+
+    assert res.status_code == 200
+    transitions = res.json()["score"]["meta"]["arrangement_transitions"]
+    assert transitions == [
+        {"transition_mode": "manual", "breath_beats": 1.0, "run_on_beats": 0.5},
+        {"transition_mode": "off", "breath_beats": 0.0, "run_on_beats": None},
+    ]
+
+
+def test_legacy_requests_without_arrangement_transitions_are_behaviorally_unchanged():
+    legacy_payload = {
+        "sections": [
+            {"id": "v1", "label": "Verse", "is_verse": True, "text": "Morning light renews us"},
+            {"id": "c1", "label": "Chorus", "is_verse": False, "text": "Sing with joy together"},
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True},
+            {"section_id": "c1", "is_verse": False},
+        ],
+        "preferences": {"key": "D", "time_signature": "4/4", "tempo_bpm": 92},
+        "seed_strategy": "stable",
+    }
+
+    res = client.post("/api/generate-melody", json=legacy_payload)
+
+    assert res.status_code == 200
+    score = res.json()["score"]
+
+    assert score["meta"]["arrangement_transitions"] == []
+    assert score["meta"]["arrangement_music_units"] == [
+        {"arrangement_index": 0, "music_unit_id": "verse", "verse_index": 1},
+        {"arrangement_index": 1, "music_unit_id": "Chorus", "verse_index": 1},
+    ]
+    assert len(score["measures"]) == 2
+    assert [chord["degree"] for chord in score["chord_progression"]] == [1, 1]

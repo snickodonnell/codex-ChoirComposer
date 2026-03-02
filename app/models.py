@@ -122,9 +122,31 @@ class CompositionPreferences(BaseModel):
 class CompositionRequest(BaseModel):
     sections: list[LyricSection]
     arrangement: list[ArrangementItem] = Field(default_factory=list)
+    arrangement_transitions: list["ArrangementTransition"] = Field(default_factory=list)
     preferences: CompositionPreferences = Field(default_factory=CompositionPreferences)
     seed_strategy: SeedStrategy = "random"
     seed: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def validate_arrangement_transitions(self):
+        expected_boundaries = max(0, len(self.arrangement) - 1)
+        if self.arrangement_transitions and len(self.arrangement_transitions) != expected_boundaries:
+            raise ValueError("arrangement_transitions must match arrangement boundary count (len(arrangement)-1).")
+        return self
+
+
+class ArrangementTransition(BaseModel):
+    transition_mode: Literal["auto", "manual", "off"] | None = "auto"
+    breath_beats: float | None = Field(default=None, ge=0)
+    run_on_beats: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def normalize_transition(self):
+        if self.transition_mode is None:
+            self.transition_mode = "auto"
+        if self.transition_mode != "manual":
+            self.run_on_beats = None
+        return self
 
 
 class ScoreSyllable(BaseModel):
@@ -184,6 +206,7 @@ class ScoreMeta(BaseModel):
     stage: Literal["melody", "satb"]
     rationale: str
     arrangement_music_units: list["ArrangementMusicUnit"] = Field(default_factory=list)
+    arrangement_transitions: list[ArrangementTransition] = Field(default_factory=list)
     verse_music_unit_form: "VerseMusicUnitForm | None" = None
 
 
