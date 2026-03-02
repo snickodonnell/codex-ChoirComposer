@@ -101,6 +101,7 @@ def _copy_note_chunk(note: ScoreNote, beats: float, first_chunk: bool) -> ScoreN
         update={
             "beats": beats,
             "lyric": None,
+            "lyric_syllable_id": note.lyric_syllable_id,
             "lyric_mode": "tie_continue",
         }
     )
