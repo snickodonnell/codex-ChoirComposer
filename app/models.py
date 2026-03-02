@@ -207,7 +207,18 @@ class ScoreMeta(BaseModel):
     rationale: str
     arrangement_music_units: list["ArrangementMusicUnit"] = Field(default_factory=list)
     arrangement_transitions: list[ArrangementTransition] = Field(default_factory=list)
+    boundary_plans: list["BoundaryPlan"] = Field(default_factory=list)
     verse_music_unit_form: "VerseMusicUnitForm | None" = None
+
+
+class BoundaryPlan(BaseModel):
+    sectionA_id: str = Field(min_length=1, max_length=120)
+    sectionB_id: str = Field(min_length=1, max_length=120)
+    time_signature: str
+    breath_beats_effective: float = Field(ge=0)
+    pickup_beats_B: float = Field(ge=0)
+    tail_reservation_beats: float = Field(ge=0)
+    run_on_beats_effective: float = Field(ge=0)
 
 
 class VerseMusicUnitForm(BaseModel):
