@@ -276,6 +276,102 @@ def test_satb_playback_remains_available_after_multiple_generations():
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
 
 
+def test_generate_melody_hides_inline_staff_error_when_inline_staff_disabled():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.click("#generateMelody")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                      return meta.trim().length > 0;
+                    }
+                    """,
+                    timeout=20000,
+                )
+
+                result = page.evaluate(
+                    """
+                    () => ({
+                      errorsText: document.querySelector('#formErrors')?.textContent || '',
+                      melodySheetDisplay: getComputedStyle(document.querySelector('#melodySheet')).display,
+                      melodyInlineNotice: document.querySelector('#melodyInlineNotice')?.textContent || '',
+                    })
+                    """
+                )
+
+                assert "Inline staff view is unavailable" not in result["errorsText"]
+                assert result["melodySheetDisplay"] == "none"
+                assert result["melodyInlineNotice"].strip() == ""
+                assert page.locator("#startMelody").is_disabled() is False
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
+def test_inline_staff_render_error_is_non_blocking_notice_when_inline_staff_enabled():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with run_app_server() as base_url:
+        try:
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                page.goto(base_url, wait_until="domcontentloaded")
+
+                page.evaluate(
+                    """
+                    () => {
+                      window.__INLINE_STAFF_ENABLED_OVERRIDE = true;
+                      window.drawStaff = () => {
+                        throw new Error('forced inline render failure for test');
+                      };
+                    }
+                    """
+                )
+
+                page.click("#generateMelody")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const meta = document.querySelector('#melodyMeta')?.textContent || '';
+                      return meta.trim().length > 0;
+                    }
+                    """,
+                    timeout=20000,
+                )
+                page.wait_for_function(
+                    """
+                    () => (document.querySelector('#melodyPreview')?.innerHTML || '').length > 0
+                    """,
+                    timeout=20000,
+                )
+
+                result = page.evaluate(
+                    """
+                    () => ({
+                      errorsText: document.querySelector('#formErrors')?.textContent || '',
+                      inlineNotice: document.querySelector('#melodyInlineNotice')?.textContent || '',
+                      previewStatus: document.querySelector('#melodyPreviewStatus')?.textContent || '',
+                    })
+                    """
+                )
+
+                assert "Inline staff view is unavailable" not in result["errorsText"]
+                assert "Inline staff preview is unavailable" in result["inlineNotice"]
+                assert "Preview failed" not in result["previewStatus"]
+                assert page.locator("#startMelody").is_disabled() is False
+                browser.close()
+        except Exception as exc:  # pragma: no cover - environment-dependent fallback
+            pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
+
+
 def test_regenerate_melody_renders_warning_banner_when_endpoint_returns_warnings():
     playwright = pytest.importorskip("playwright.sync_api")
 

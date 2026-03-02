@@ -40,6 +40,7 @@ button:hover { background: #1e40af; }
 .phrase-block-row { display: flex; gap: .45rem; align-items: center; }
 .phrase-block-text { flex: 1; background: #eef2ff; color: #1e293b; }
 .phrase-block-toggle { margin-bottom: 0; font-size: .75rem; color: #334155; display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; }
+.inline-staff-notice { margin-top: .5rem; font-size: .85rem; color: #475569; }
 .phrase-block-toggle input { margin-top: 0; }
 .actions { display: flex; gap: .5rem; margin: .75rem 0; }
 .actions input { flex: 1; }
