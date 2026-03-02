@@ -30,6 +30,7 @@ from app.services.lyric_mapping import (
     plan_syllable_rhythm,
     tokenize_phrase_blocks,
 )
+from app.services.boundary_planner import build_boundary_plans
 from app.services.music_theory import (
     VOICE_RANGES,
     VOICE_TESSITURA,
@@ -1729,6 +1730,11 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
         soprano_notes = rebuilt_soprano
 
     measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, ts)
+    boundary_plans = build_boundary_plans(
+        sections=sections,
+        time_signature=ts,
+        transitions=req.arrangement_transitions,
+    )
     score = CanonicalScore(
         meta=ScoreMeta(
             key=key,
@@ -1740,6 +1746,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
             rationale="Deterministic lyric-to-rhythm mapping with section-wise diatonic chord progression as harmonic authority.",
             arrangement_music_units=arrangement_music_units,
             arrangement_transitions=req.arrangement_transitions,
+            boundary_plans=boundary_plans,
             verse_music_unit_form=verse_music_unit_form,
         ),
         sections=sections,

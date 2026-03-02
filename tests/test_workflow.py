@@ -667,9 +667,30 @@ def test_arrangement_transitions_round_trip_to_score_meta():
 
     assert res.status_code == 200
     transitions = res.json()["score"]["meta"]["arrangement_transitions"]
+    boundary_plans = res.json()["score"]["meta"]["boundary_plans"]
     assert transitions == [
         {"transition_mode": "manual", "breath_beats": 1.0, "run_on_beats": 0.5},
         {"transition_mode": "off", "breath_beats": 0.0, "run_on_beats": None},
+    ]
+    assert boundary_plans == [
+        {
+            "sectionA_id": "sec-1",
+            "sectionB_id": "sec-2",
+            "time_signature": "4/4",
+            "breath_beats_effective": 1.0,
+            "pickup_beats_B": 0.0,
+            "tail_reservation_beats": 1.0,
+            "run_on_beats_effective": 0.0,
+        },
+        {
+            "sectionA_id": "sec-2",
+            "sectionB_id": "sec-3",
+            "time_signature": "4/4",
+            "breath_beats_effective": 0.0,
+            "pickup_beats_B": 0.0,
+            "tail_reservation_beats": 0.0,
+            "run_on_beats_effective": 0.0,
+        },
     ]
 
 
@@ -693,6 +714,17 @@ def test_legacy_requests_without_arrangement_transitions_are_behaviorally_unchan
     score = res.json()["score"]
 
     assert score["meta"]["arrangement_transitions"] == []
+    assert score["meta"]["boundary_plans"] == [
+        {
+            "sectionA_id": "sec-1",
+            "sectionB_id": "sec-2",
+            "time_signature": "4/4",
+            "breath_beats_effective": 0.0,
+            "pickup_beats_B": 0.0,
+            "tail_reservation_beats": 0.0,
+            "run_on_beats_effective": 0.0,
+        }
+    ]
     assert score["meta"]["arrangement_music_units"] == [
         {"arrangement_index": 0, "music_unit_id": "verse", "verse_index": 1},
         {"arrangement_index": 1, "music_unit_id": "Chorus", "verse_index": 1},
