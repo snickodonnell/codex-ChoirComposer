@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Choir Composer</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260217-testdata-fix" />
+    <link rel="stylesheet" href="/static/style.css?v=20260302-transition-controls" />
     <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
     <script src="https://unpkg.com/vexflow@4.2.5/build/cjs/vexflow.js"></script>
   </head>
@@ -22,7 +22,7 @@
         <button id="loadTestData" type="button">Load Hymn Test Data</button>
         <hr />
         <h3>Arrangement</h3>
-        <p>Build song order by reusing section labels from your section library. Verse items are auto-numbered by arrangement order and share one Verse music unit. Non-verse sections keep their own labeled music. Review Phrase Blocks (auto-split from lyric line breaks). By default each block ends at a barline; use “merge with next phrase” for run-on phrasing, optionally add a visual breath marker after a phrase, and configure anacrusis (pickup) manually or via stable auto recommendation.</p>
+        <p>Build song order by reusing section labels from your section library. Verse items are auto-numbered by arrangement order and share one Verse music unit. Non-verse sections keep their own labeled music. Review Phrase Blocks (auto-split from lyric line breaks). By default each block ends at a barline; use “merge with next phrase” for run-on phrasing, optionally add a visual breath marker after a phrase, configure anacrusis (pickup) manually or via stable auto recommendation, and tune each section boundary with Run-on / Elision (Auto, Off, or Manual) for quick A/B listening.</p>
         <div class="arrangement-controls">
           <label>Add section to arrangement
             <select id="arrangementSectionSelect"></select>

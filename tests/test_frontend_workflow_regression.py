@@ -650,7 +650,7 @@ def test_refine_controls_are_removed_from_mvp_ui():
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
 
 
-def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
+def test_seed_data_defaults_to_three_verses_with_auto_boundary_transitions_and_manual_pickups():
     playwright = pytest.importorskip("playwright.sync_api")
 
     with run_app_server() as base_url:
@@ -669,6 +669,7 @@ def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
                       })),
                       arrangementModes: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-mode')).map((el) => el.value),
                       arrangementBeats: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-beats')).map((el) => Number(el.value)),
+                      transitionModes: Array.from(document.querySelectorAll('#arrangementList .arrangement-transition-mode')).map((el) => el.value),
                     })
                     """
                 )
@@ -677,11 +678,13 @@ def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
                 assert all(item["label"] == "Verse" and item["isVerse"] for item in seed_state["sectionRows"])
                 assert seed_state["arrangementModes"] == ["manual", "manual", "manual"]
                 assert seed_state["arrangementBeats"] == [2, 2, 2]
+                assert seed_state["transitionModes"] == ["auto", "auto", "auto"]
 
                 page.fill("#sections .section-row:nth-of-type(1) .section-label", "Chorus")
                 page.click("#arrangementList .arrangement-anacrusis-mode")
                 page.select_option("#arrangementList .arrangement-anacrusis-mode", "off")
                 page.fill("#arrangementList .arrangement-anacrusis-beats", "0")
+                page.select_option("#arrangementList .arrangement-transition-mode", "off")
 
                 page.click("#loadTestData")
 
@@ -691,6 +694,7 @@ def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
                       sectionLabels: Array.from(document.querySelectorAll('#sections .section-label')).map((el) => el.value),
                       arrangementModes: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-mode')).map((el) => el.value),
                       arrangementBeats: Array.from(document.querySelectorAll('#arrangementList .arrangement-anacrusis-beats')).map((el) => Number(el.value)),
+                      transitionModes: Array.from(document.querySelectorAll('#arrangementList .arrangement-transition-mode')).map((el) => el.value),
                     })
                     """
                 )
@@ -698,6 +702,7 @@ def test_seed_data_defaults_to_three_verses_and_manual_two_beat_pickups():
                 assert reset_state["sectionLabels"] == ["Verse", "Verse", "Verse"]
                 assert reset_state["arrangementModes"] == ["manual", "manual", "manual"]
                 assert reset_state["arrangementBeats"] == [2, 2, 2]
+                assert reset_state["transitionModes"] == ["auto", "auto", "auto"]
                 browser.close()
         except Exception as exc:  # pragma: no cover - environment-dependent fallback
             pytest.skip(f"Playwright browser runtime unavailable in this environment: {exc}")
