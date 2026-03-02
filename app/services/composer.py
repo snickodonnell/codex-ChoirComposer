@@ -1266,6 +1266,7 @@ def _enforce_section_measure_capacities(
                 current.lyric = None
                 if not current.is_rest:
                     current.lyric_mode = "tie_continue"
+                    current.lyric_syllable_id = chunk.lyric_syllable_id
             else:
                 pending_idx += 1
 
@@ -1988,19 +1989,18 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
 
         score = normalize_score_for_rendering(score)
         errs = validate_score(score, primary_mode)
-        if req.preferences.bars_per_verse is not None:
-            non_blocking_prefixes = (
-                "Lyric phrase ending",
-                "Orphan melodic note",
-                "Verse contains lyricless notes",
-                "Soprano strong-beat note",
-                "soprano note",
-                "Cadence tail reservation warning",
-            )
-            if errs and all(err.startswith(non_blocking_prefixes) for err in errs):
-                log_event(logger, "validation_soft_pass", stage="melody_generation", attempt=attempt, diagnostics=errs)
-                log_event(logger, "melody_generation_completed", attempt=attempt, soft_validated=True)
-                return score
+        non_blocking_prefixes = (
+            "Lyric phrase ending",
+            "Orphan melodic note",
+            "Verse contains lyricless notes",
+            "Soprano strong-beat note",
+            "soprano note",
+            "Cadence tail reservation warning",
+        )
+        if errs and all(err.startswith(non_blocking_prefixes) for err in errs):
+            log_event(logger, "validation_soft_pass", stage="melody_generation", attempt=attempt, diagnostics=errs)
+            log_event(logger, "melody_generation_completed", attempt=attempt, soft_validated=True)
+            return score
         if not errs:
             log_event(logger, "validation_passed", stage="melody_generation", attempt=attempt)
             log_event(logger, "melody_generation_completed", attempt=attempt)

@@ -828,3 +828,43 @@ def test_legacy_requests_without_arrangement_transitions_are_behaviorally_unchan
     ]
     assert len(score["measures"]) == 2
     assert [chord["degree"] for chord in score["chord_progression"]] == [1, 1]
+
+
+def test_amazing_grace_manual_pickup_16_bars_preview_and_strict_lyric_coverage_include_found_and_blind(monkeypatch):
+    from app.services import engraving_preview
+
+    class StubPreviewService:
+        def engrave_score(self, score, options):
+            return ([engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>ok</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False)
+
+    monkeypatch.setattr("app.main.preview_service", StubPreviewService())
+
+    melody_response = client.post("/api/generate-melody", json=_amazing_grace_payload(seed_strategy="stable"))
+    assert melody_response.status_code == 200
+    melody_score = melody_response.json()["score"]
+
+    preview_response = client.post(
+        "/api/engrave/preview",
+        json={"score": melody_score, "preview_mode": "melody", "include_all_pages": False, "scale": 42},
+    )
+    assert preview_response.status_code == 200
+
+    validate_response = client.post("/api/validate-score", json={"score": melody_score})
+    assert validate_response.status_code == 200
+    validate_payload = validate_response.json()
+    assert validate_payload["valid"] is True
+
+    section_one = next(section for section in melody_score["sections"] if section["id"] == "sec-1")
+    text_by_id = {syllable["id"]: syllable["text"].lower() for syllable in section_one["syllables"]}
+
+    underlay_sequence = []
+    for measure in melody_score["measures"]:
+        for note in measure["voices"]["soprano"]:
+            if note["section_id"] != "sec-1" or note["is_rest"]:
+                continue
+            syllable_id = note.get("lyric_syllable_id")
+            if syllable_id in text_by_id:
+                underlay_sequence.append(text_by_id[syllable_id])
+
+    assert "found" in underlay_sequence
+    assert "blind" in underlay_sequence
