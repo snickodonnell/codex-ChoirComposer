@@ -1233,6 +1233,7 @@ def _enforce_section_measure_capacities(
     section_id: str,
     notes: list[ScoreNote],
     capacities: list[float],
+    tail_reservation_beats: float = 0.0,
 ) -> list[ScoreNote]:
     if not capacities:
         if notes:
@@ -1243,8 +1244,14 @@ def _enforce_section_measure_capacities(
     pending_idx = 0
     constrained: list[ScoreNote] = []
 
-    for capacity in capacities:
+    tail_reservation_shortfall = 0.0
+
+    for measure_idx, capacity in enumerate(capacities):
         remaining = max(0.0, capacity)
+        reserved_tail = 0.0
+        if measure_idx == len(capacities) - 1 and tail_reservation_beats > 1e-9:
+            reserved_tail = min(remaining, tail_reservation_beats)
+            remaining = max(0.0, remaining - reserved_tail)
         measure_start_idx = len(constrained)
         while remaining > 1e-9 and pending_idx < len(pending):
             current = pending[pending_idx]
@@ -1304,9 +1311,72 @@ def _enforce_section_measure_capacities(
                     )
                 )
 
+        tail_remaining = reserved_tail
+        while tail_remaining > 1e-9 and pending_idx < len(pending):
+            current = pending[pending_idx]
+            can_place_in_tail = current.is_rest or current.lyric is None
+            if not can_place_in_tail:
+                break
+
+            take = min(current.beats, tail_remaining)
+            chunk = current.model_copy(deep=True)
+            chunk.beats = take
+            if not chunk.is_rest:
+                chunk.lyric = None
+                if chunk.lyric_mode not in {"tie_continue", "melisma_continue"}:
+                    chunk.lyric_mode = "tie_continue"
+            constrained.append(chunk)
+
+            if current.beats - take > 1e-9:
+                current.beats -= take
+            else:
+                pending_idx += 1
+            tail_remaining -= take
+
+        if tail_remaining > 1e-9:
+            constrained.append(
+                ScoreNote(
+                    pitch="REST",
+                    beats=tail_remaining,
+                    is_rest=True,
+                    lyric=None,
+                    lyric_syllable_id=None,
+                    lyric_mode="none",
+                    section_id="interlude",
+                )
+            )
+            tail_remaining = 0.0
+
+        if reserved_tail > 1e-9:
+            actual_tail_nonlyric = sum(
+                note.beats
+                for note in constrained[measure_start_idx:]
+                if note.is_rest or note.lyric is None
+            )
+            if actual_tail_nonlyric + 1e-9 < reserved_tail:
+                tail_reservation_shortfall += reserved_tail - actual_tail_nonlyric
+
     if pending_idx < len(pending):
+        if tail_reservation_beats > 1e-9:
+            logger.warning(
+                "Cadence tail reservation warning: section %s fallback to unreserved allocation because reserved tail could not be satisfied.",
+                section_id,
+            )
+            return _enforce_section_measure_capacities(
+                section_id=section_id,
+                notes=notes,
+                capacities=capacities,
+                tail_reservation_beats=0.0,
+            )
         raise VerseFormConstraintError(
             f"Verse {section_id} exceeds planned measure capacity ({len(capacities)} measures)."
+        )
+
+    if tail_reservation_shortfall > 1e-9:
+        logger.warning(
+            "Cadence tail reservation warning: section %s could not satisfy reserved tail by %.3f beats.",
+            section_id,
+            tail_reservation_shortfall,
         )
 
     return constrained
@@ -1694,6 +1764,13 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
                 verse_template_notes = [soprano_notes[idx].model_copy(deep=True) for idx in note_indices]
 
 
+    boundary_plans = build_boundary_plans(
+        sections=sections,
+        time_signature=ts,
+        transitions=req.arrangement_transitions,
+    )
+    boundary_tail_by_section = {plan.sectionA_id: plan.tail_reservation_beats for plan in boundary_plans}
+
     if verse_music_unit_form is not None:
         section_by_id = {section.id: section for section in sections}
         planned_measure_count = verse_music_unit_form.total_measure_count
@@ -1712,6 +1789,7 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
                 section_id=section_id,
                 notes=source_notes,
                 capacities=capacities,
+                tail_reservation_beats=boundary_tail_by_section.get(section_id, 0.0),
             )
             if section_pickup > 1e-9:
                 rebuilt_soprano.append(
@@ -1730,11 +1808,6 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
         soprano_notes = rebuilt_soprano
 
     measures = _pack_measures({"soprano": soprano_notes, "alto": [], "tenor": [], "bass": []}, ts)
-    boundary_plans = build_boundary_plans(
-        sections=sections,
-        time_signature=ts,
-        transitions=req.arrangement_transitions,
-    )
     score = CanonicalScore(
         meta=ScoreMeta(
             key=key,
@@ -1784,7 +1857,12 @@ def _compose_melody_once(req: CompositionRequest, attempt_number: int, generatio
             before_beats = sum(note.beats for note in source_notes)
             before_measures = int(math.ceil(before_beats / beat_cap - 1e-9)) if before_beats > 1e-9 else 0
             capacities = [max(0.0, beat_cap - section_pickup)] + [beat_cap] * max(0, planned_measure_count - 1)
-            constrained = _enforce_section_measure_capacities(section_id=section_id, notes=source_notes, capacities=capacities)
+            constrained = _enforce_section_measure_capacities(
+                section_id=section_id,
+                notes=source_notes,
+                capacities=capacities,
+                tail_reservation_beats=boundary_tail_by_section.get(section_id, 0.0),
+            )
             after_beats = sum(note.beats for note in constrained)
             after_measures = int(math.ceil(after_beats / beat_cap - 1e-9)) if after_beats > 1e-9 else 0
             padding_beats_added = max(0.0, after_beats - before_beats)
@@ -1917,6 +1995,7 @@ def generate_melody_score(req: CompositionRequest) -> CanonicalScore:
                 "Verse contains lyricless notes",
                 "Soprano strong-beat note",
                 "soprano note",
+                "Cadence tail reservation warning",
             )
             if errs and all(err.startswith(non_blocking_prefixes) for err in errs):
                 log_event(logger, "validation_soft_pass", stage="melody_generation", attempt=attempt, diagnostics=errs)

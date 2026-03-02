@@ -593,6 +593,79 @@ def _amazing_grace_payload(seed_strategy: str = "random", seed: str | None = Non
     return payload
 
 
+
+
+def test_generate_melody_34_pickup_bars_per_verse_16_reserves_cadence_tail_for_next_pickup_and_preview_export_succeed(monkeypatch):
+    from app.services import engraving_preview
+
+    class StubPreviewService:
+        def engrave_score(self, score, options):
+            return ([engraving_preview.EngravedPageArtifact(page=1, svg="<svg><text>ok</text></svg>", svg_meta={"first_tag_snippet": "<svg>"}, svg_hash="hash-1")], False)
+
+    monkeypatch.setattr("app.main.preview_service", StubPreviewService())
+
+    payload = {
+        "sections": [
+            {
+                "id": "v1",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Amazing grace how sweet the sound\nThat saved a wretch like me",
+            },
+            {
+                "id": "v2",
+                "label": "Verse",
+                "is_verse": True,
+                "text": "Twas grace that taught my heart to fear\nAnd grace my fears relieved",
+            },
+        ],
+        "arrangement": [
+            {"section_id": "v1", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+            {"section_id": "v2", "is_verse": True, "anacrusis_mode": "manual", "anacrusis_beats": 2},
+        ],
+        "arrangement_transitions": [
+            {"transition_mode": "manual", "breath_beats": 0, "run_on_beats": 0},
+        ],
+        "preferences": {"key": "C", "time_signature": "3/4", "tempo_bpm": 90, "bars_per_verse": 16},
+        "seed_strategy": "stable",
+    }
+
+    res = client.post("/api/generate-melody", json=payload)
+    assert res.status_code == 200
+    body = res.json()
+    score = body["score"]
+
+    verse_measures = [
+        measure
+        for measure in score["measures"]
+        if any(note["section_id"] == "sec-1" for note in measure["voices"]["soprano"])
+    ]
+    assert len(verse_measures) == 16
+
+    boundary_plan = score["meta"]["boundary_plans"][0]
+    reserved_tail = boundary_plan["tail_reservation_beats"]
+    assert reserved_tail >= 2
+
+    final_verse_measure = verse_measures[-1]
+    sec1_notes = [note for note in final_verse_measure["voices"]["soprano"] if note["section_id"] == "sec-1"]
+    nonlyric_tail_beats = sum(note["beats"] for note in sec1_notes if note["is_rest"] or note["lyric"] is None)
+    assert nonlyric_tail_beats >= reserved_tail
+    assert all(note["lyric"] is None for note in sec1_notes)
+
+    preview_res = client.post(
+        "/api/engrave/preview",
+        json={"score": score, "preview_mode": "melody", "include_all_pages": False, "scale": 42},
+    )
+    assert preview_res.status_code == 200
+
+    satb_res = client.post("/api/generate-satb", json={"score": score})
+    assert satb_res.status_code == 200
+
+    export_res = client.post("/api/export-musicxml", json={"score": satb_res.json()["score"]})
+    assert export_res.status_code == 200
+    assert "score-partwise" in export_res.text
+
+
 def test_generate_melody_seed_modes_support_stable_and_random_behaviors():
     stable_payload = _sample_request().model_dump()
     stable_payload["seed_strategy"] = "stable"

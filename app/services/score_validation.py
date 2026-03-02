@@ -21,6 +21,7 @@ def _is_warning_diagnostic(message: str) -> bool:
         "Chord ",
         "Potential parallel",
         "Wide spacing",
+        "Cadence tail reservation",
     )
     warning_fragments = (
         "Lyric phrase ending",
@@ -57,6 +58,7 @@ def validate_score_diagnostics(score: CanonicalScore, primary_mode: str | None =
     errors.extend(_validate_lyric_mapping(score))
     errors.extend(_validate_phrase_barline_alignment(score))
     errors.extend(_validate_pickup_measure_capacities(score))
+    errors.extend(_validate_cadence_tail_reservation(score))
     errors.extend(_validate_ranges_and_motion(score))
     errors.extend(_validate_harmonic_integrity(score))
 
@@ -248,6 +250,62 @@ def _validate_pickup_measure_capacities(score: CanonicalScore) -> list[str]:
                     errors.append(
                         f"Section {section_id} voice {voice} measure {measure_number} non-pickup beats {nonpickup:g} != expected full {beat_cap:g}."
                     )
+
+    return errors
+
+
+
+
+def _validate_cadence_tail_reservation(score: CanonicalScore) -> list[str]:
+    errors: list[str] = []
+    boundary_plans = {plan.sectionA_id: plan for plan in score.meta.boundary_plans if plan.tail_reservation_beats > 1e-9}
+    if not boundary_plans:
+        return errors
+
+    beat_cap = beats_per_measure(score.meta.time_signature)
+    voice = "soprano"
+
+    for section_id, plan in boundary_plans.items():
+        section_measures = [
+            measure
+            for measure in score.measures
+            if any(note.section_id == section_id for note in measure.voices.get(voice, []))
+        ]
+        if not section_measures:
+            continue
+
+        final_measure_notes = [note for note in section_measures[-1].voices.get(voice, []) if note.section_id == section_id]
+        if not final_measure_notes:
+            continue
+
+        note_starts: list[tuple[float, float, object]] = []
+        local_cursor = 0.0
+        for note in final_measure_notes:
+            start = local_cursor
+            end = local_cursor + note.beats
+            note_starts.append((start, end, note))
+            local_cursor = end
+
+        tail_start = max(0.0, beat_cap - plan.tail_reservation_beats)
+        reserved_nonlyric = 0.0
+        lyric_overlap = 0.0
+        for start, end, note in note_starts:
+            overlap = max(0.0, min(end, beat_cap) - max(start, tail_start))
+            if overlap <= 1e-9:
+                continue
+            if note.is_rest or note.lyric is None:
+                reserved_nonlyric += overlap
+            else:
+                lyric_overlap += overlap
+
+        if reserved_nonlyric + 1e-6 < plan.tail_reservation_beats:
+            errors.append(
+                f"Cadence tail reservation warning: section {section_id} reserves {plan.tail_reservation_beats:g} beats, got {reserved_nonlyric:g} beats of non-lyric tail."
+            )
+        if lyric_overlap > 1e-6:
+            errors.append(
+                f"Cadence tail reservation warning: section {section_id} has lyric-bearing material ({lyric_overlap:g} beats) inside reserved tail."
+            )
 
     return errors
 
