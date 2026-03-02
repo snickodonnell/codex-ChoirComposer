@@ -202,6 +202,19 @@ def generate_melody_endpoint(payload: CompositionRequest):
         ("verse" if section_by_id.get(item.section_id) and section_by_id[item.section_id].is_verse else (section_by_id.get(item.section_id).label if section_by_id.get(item.section_id) else ""))
         for item in payload.arrangement
     ]
+    transition_boundaries = []
+    for idx, transition in enumerate(payload.arrangement_transitions):
+        left = arrangement_labels[idx] if idx < len(arrangement_labels) else None
+        right = arrangement_labels[idx + 1] if idx + 1 < len(arrangement_labels) else None
+        transition_boundaries.append({
+            "boundary_index": idx,
+            "from_section_id": left,
+            "to_section_id": right,
+            "transition_mode": transition.transition_mode,
+            "breath_beats": transition.breath_beats,
+            "run_on_beats": transition.run_on_beats,
+        })
+
     log_event(
         logger,
         "arrangement_inputs_received",
@@ -213,6 +226,7 @@ def generate_melody_endpoint(payload: CompositionRequest):
         section_labels=[section.label for section in payload.sections],
         arrangement_order=arrangement_labels,
         music_units_selected=[u for u in selected_units if u],
+        arrangement_transitions=transition_boundaries,
     )
     try:
         seed_strategy_used, seed_used = resolve_generation_seed(payload)

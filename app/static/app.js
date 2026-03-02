@@ -2005,6 +2005,11 @@ function collectPayload() {
     anacrusis_beats: Number(item.querySelector('.arrangement-anacrusis-beats')?.value) || 0,
     phrase_blocks: getArrangementItemPhraseBlocks(item),
   }));
+  const arrangementTransitions = Array.from({ length: Math.max(0, arrangement.length - 1) }, () => ({
+    transition_mode: 'auto',
+    breath_beats: null,
+    run_on_beats: null,
+  }));
 
   if (!sectionLibrary.length) {
     errors.push(createValidationIssue('Please add lyrics to at least one section before generating a melody.', sectionsCard));
@@ -2037,6 +2042,7 @@ function collectPayload() {
   return {
     sections: sectionLibrary,
     arrangement,
+    arrangement_transitions: arrangementTransitions,
     preferences: {
       key: document.getElementById('key').value || null,
       primary_mode: normalizeMode(document.getElementById('primaryMode').value) || null,
